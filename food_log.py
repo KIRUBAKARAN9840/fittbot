@@ -1,3 +1,4 @@
+#food_log
 from fastapi import APIRouter, HTTPException, Query, Depends
 from fastapi.responses import StreamingResponse
 from fastapi_limiter.depends import RateLimiter
@@ -7,8 +8,8 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 from app.models.database import get_db
 from app.models.deps import get_http, get_oai, get_mem
-import openai
 from openai import OpenAI
+import google.generativeai as genai
 import json, re, os
 
 
@@ -27,9 +28,20 @@ APP_ENV = os.getenv("APP_ENV", "prod")
 TZNAME = os.getenv("TZ", "Asia/Kolkata")
 IST = pytz.timezone(TZNAME)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+# Validate API keys
+if not OPENAI_API_KEY:
+    raise ValueError("OPENAI_API_KEY environment variable is not set")
+if not GEMINI_API_KEY:
+    raise ValueError("GEMINI_API_KEY environment variable is not set")
 
 # Initialize OpenAI client
-client = OpenAI(api_key=OPENAI_API_KEY)
+openai_client = OpenAI(api_key=OPENAI_API_KEY)
+
+# Configure Gemini
+genai.configure(api_key=GEMINI_API_KEY)
+gemini_model = genai.GenerativeModel("gemini-1.5-flash")
 
 @router.get("/healthz")
 async def healthz():
@@ -320,53 +332,53 @@ def convert_food_to_item_format(food):
     }
 
 def extract_food_info_using_openai(text: str):
+    """Enhanced AI-driven food extraction with OpenAI primary and Gemini fallback"""
+    reasoning_prompt = f"""
+    You are analyzing this text: "{text}"
 
-    """Enhanced AI-driven food extraction with better food recognition and unit handling"""
+    FOOD IDENTIFICATION RULES:
+    1. Extract ANY item that could reasonably be food, beverage, or drink
+    2. Include ALL fruits, vegetables, grains, meats, dairy, beverages, juices, snacks
+    3. Be very permissive - if it might be food, include it
+    4. Handle common misspellings and normalize names
+    5. Recognize compound food names (sugarcanjuice = sugar cane juice, etc.)
+    
+    QUANTITY AND UNIT RULES:
+    1. Only set quantity if user explicitly provided a specific amount
+    2. If just food name without quantity, set quantity to null
+    3. Use the most natural unit for each food type:
+       - Rice/grains: prefer "plates" or "bowls"
+       - Juices/liquids: prefer "ml" or "glasses"  
+       - Fruits/vegetables: prefer "pieces"
+       - Meat/protein: prefer "grams"
+    4. If user provides quantity with unit, use their unit
+    5. If user provides just number, use the natural unit for that food
+    
+    EXAMPLES:
+    - "rice" → quantity: null, unit: "plates"
+    - "2 plates rice" → quantity: 2, unit: "plates"  
+    - "500g rice" → quantity: 500, unit: "grams"
+    - "apple juice" → quantity: null, unit: "ml"
+    - "200ml orange juice" → quantity: 200, unit: "ml"
+    - "2 apples" → quantity: 2, unit: "pieces"
+
+    Return valid JSON:
+    {{
+        "foods": [
+            {{
+                "name": "normalized_food_name",
+                "quantity": number_or_null,
+                "unit": "most_appropriate_unit"
+            }}
+        ]
+    }}
+    
+    Do NOT include nutrition values in the response - they will be calculated separately.
+    """
+
+    # Try OpenAI first
     try:
-        reasoning_prompt = f"""
-        You are analyzing this text: "{text}"
-
-        FOOD IDENTIFICATION RULES:
-        1. Extract ANY item that could reasonably be food, beverage, or drink
-        2. Include ALL fruits, vegetables, grains, meats, dairy, beverages, juices, snacks
-        3. Be very permissive - if it might be food, include it
-        4. Handle common misspellings and normalize names
-        5. Recognize compound food names (sugarcanjuice = sugar cane juice, etc.)
-        
-        QUANTITY AND UNIT RULES:
-        1. Only set quantity if user explicitly provided a specific amount
-        2. If just food name without quantity, set quantity to null
-        3. Use the most natural unit for each food type:
-           - Rice/grains: prefer "plates" or "bowls"
-           - Juices/liquids: prefer "ml" or "glasses"  
-           - Fruits/vegetables: prefer "pieces"
-           - Meat/protein: prefer "grams"
-        4. If user provides quantity with unit, use their unit
-        5. If user provides just number, use the natural unit for that food
-        
-        EXAMPLES:
-        - "rice" → quantity: null, unit: "plates"
-        - "2 plates rice" → quantity: 2, unit: "plates"  
-        - "500g rice" → quantity: 500, unit: "grams"
-        - "apple juice" → quantity: null, unit: "ml"
-        - "200ml orange juice" → quantity: 200, unit: "ml"
-        - "2 apples" → quantity: 2, unit: "pieces"
-
-        Return valid JSON:
-        {{
-            "foods": [
-                {{
-                    "name": "normalized_food_name",
-                    "quantity": number_or_null,
-                    "unit": "most_appropriate_unit"
-                }}
-            ]
-        }}
-        
-        Do NOT include nutrition values in the response - they will be calculated separately.
-        """
-
-        response = client.chat.completions.create(
+        response = openai_client.chat.completions.create(
             model="gpt-4o",
             messages=[
                 {
@@ -401,13 +413,45 @@ def extract_food_info_using_openai(text: str):
             
             processed_foods.append(food)
         
-        print(f"DEBUG: Processed foods: {[(f['name'], f.get('quantity'), f['unit']) for f in processed_foods]}")
+        print(f"DEBUG: OpenAI processed foods: {[(f['name'], f.get('quantity'), f['unit']) for f in processed_foods]}")
         return {"foods": processed_foods}
 
     except Exception as e:
-        print(f"OpenAI extraction error: {e}")
+        print(f"OpenAI extraction error: {e}, trying Gemini fallback...")
         
-        # Enhanced fallback parsing
+        # Try Gemini fallback
+        try:
+            response = gemini_model.generate_content(reasoning_prompt)
+            
+            if response.text:
+                result = response.text.strip()
+                result = re.sub(r"^```json\s*", "", result)
+                result = re.sub(r"\s*```$", "", result)
+                
+                parsed_result = json.loads(result)
+                foods = parsed_result.get("foods", [])
+                
+                # Process each food to add nutrition info
+                processed_foods = []
+                for food in foods:
+                    food_name = food.get('name', '').strip()
+                    if not food_name:
+                        continue
+                        
+                    # Get preferred unit if none specified
+                    if not food.get('unit'):
+                        config = get_food_config(food_name)
+                        food['unit'] = config.get('preferred_unit', 'pieces')
+                    
+                    processed_foods.append(food)
+                
+                print(f"DEBUG: Gemini processed foods: {[(f['name'], f.get('quantity'), f['unit']) for f in processed_foods]}")
+                return {"foods": processed_foods}
+                
+        except Exception as gemini_error:
+            print(f"Gemini extraction error: {gemini_error}")
+        
+        # Enhanced fallback parsing if both AI models fail
         text_lower = text.lower().strip()
         
         # Handle common corrections
@@ -974,8 +1018,8 @@ def is_quantity_input(text):
     
     # Check for pure numbers or numbers with units
     quantity_patterns = [
-        r'^\d+(?:\.\d+)?$',  # Just numbers: 2, 1.5, 100
-        r'^\d+(?:\.\d+)?\s*(g|grams?|kg|plates?|bowls?|pieces?|ml|glasses?|cups?|slices?)$'  # Numbers with units
+        r'^\d+(?:\.\d+)?,  # Just numbers: 2, 1.5, 100'
+        r'^\d+(?:\.\d+)?\s*(g|grams?|kg|plates?|bowls?|pieces?|ml|glasses?|cups?|slices?)'  # Numbers with units'
     ]
     
     return any(re.match(pattern, text_lower) for pattern in quantity_patterns)
@@ -1044,5 +1088,3 @@ async def clear_pending_state(
 ):
     await mem.clear_pending(req.user_id)
     return {"status": "cleared", "user_id": req.user_id}
-
-###################################perfect_2########################
