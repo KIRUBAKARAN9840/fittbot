@@ -47,211 +47,6 @@ gemini_model = genai.GenerativeModel("gemini-1.5-flash")
 async def healthz():
     return {"ok": True, "env": APP_ENV, "tz": TZNAME}
 
-def get_food_config(food_name):
-    """Get comprehensive food configuration including nutrition and preferred units"""
-    food_name_lower = food_name.lower()
-    
-    # Comprehensive food database with preferred units and conversions
-    food_configs = {
-        # Rice and grains - prefer plates/bowls
-        'rice': {
-            'preferred_unit': 'plates',
-            'conversions': {'plates': 150, 'bowls': 100, 'cups': 180, 'grams': 1},
-            'nutrition_per_100g': {'calories': 130, 'protein': 2.7, 'carbs': 28, 'fat': 0.3, 'fiber': 0.4, 'sugar': 0.1}
-        },
-        'basmati rice': {
-            'preferred_unit': 'plates',
-            'conversions': {'plates': 150, 'bowls': 100, 'cups': 180, 'grams': 1},
-            'nutrition_per_100g': {'calories': 130, 'protein': 2.7, 'carbs': 28, 'fat': 0.3, 'fiber': 0.4, 'sugar': 0.1}
-        },
-        'brown rice': {
-            'preferred_unit': 'plates',
-            'conversions': {'plates': 150, 'bowls': 100, 'cups': 180, 'grams': 1},
-            'nutrition_per_100g': {'calories': 111, 'protein': 2.6, 'carbs': 22, 'fat': 0.9, 'fiber': 1.8, 'sugar': 0.4}
-        },
-        'wheat': {
-            'preferred_unit': 'bowls',
-            'conversions': {'bowls': 120, 'plates': 180, 'cups': 150, 'grams': 1},
-            'nutrition_per_100g': {'calories': 340, 'protein': 13, 'carbs': 72, 'fat': 2.5, 'fiber': 11, 'sugar': 0.4}
-        },
-        'quinoa': {
-            'preferred_unit': 'bowls',
-            'conversions': {'bowls': 120, 'plates': 180, 'cups': 150, 'grams': 1},
-            'nutrition_per_100g': {'calories': 120, 'protein': 4.4, 'carbs': 22, 'fat': 1.9, 'fiber': 2.8, 'sugar': 0.9}
-        },
-        
-        # Fruits - prefer pieces
-        'apple': {
-            'preferred_unit': 'pieces',
-            'conversions': {'pieces': 150, 'slices': 25, 'grams': 1},
-            'nutrition_per_100g': {'calories': 52, 'protein': 0.3, 'carbs': 14, 'fat': 0.2, 'fiber': 2.4, 'sugar': 10}
-        },
-        'banana': {
-            'preferred_unit': 'pieces',
-            'conversions': {'pieces': 120, 'slices': 20, 'grams': 1},
-            'nutrition_per_100g': {'calories': 89, 'protein': 1.1, 'carbs': 23, 'fat': 0.3, 'fiber': 2.6, 'sugar': 12}
-        },
-        'orange': {
-            'preferred_unit': 'pieces',
-            'conversions': {'pieces': 130, 'slices': 25, 'grams': 1},
-            'nutrition_per_100g': {'calories': 47, 'protein': 0.9, 'carbs': 12, 'fat': 0.1, 'fiber': 2.4, 'sugar': 9}
-        },
-        'avocado': {
-            'preferred_unit': 'pieces',
-            'conversions': {'pieces': 200, 'slices': 30, 'grams': 1},
-            'nutrition_per_100g': {'calories': 160, 'protein': 2, 'carbs': 9, 'fat': 15, 'fiber': 7, 'sugar': 1}
-        },
-        'watermelon': {
-            'preferred_unit': 'slices',
-            'conversions': {'slices': 150, 'pieces': 400, 'grams': 1},
-            'nutrition_per_100g': {'calories': 30, 'protein': 0.6, 'carbs': 8, 'fat': 0.2, 'fiber': 0.4, 'sugar': 6}
-        },
-        'jackfruit': {
-            'preferred_unit': 'pieces',
-            'conversions': {'pieces': 100, 'slices': 50, 'grams': 1},
-            'nutrition_per_100g': {'calories': 95, 'protein': 1.7, 'carbs': 23, 'fat': 0.6, 'fiber': 1.5, 'sugar': 19}
-        },
-        'mango': {
-            'preferred_unit': 'pieces',
-            'conversions': {'pieces': 150, 'slices': 30, 'grams': 1},
-            'nutrition_per_100g': {'calories': 60, 'protein': 0.8, 'carbs': 15, 'fat': 0.4, 'fiber': 1.6, 'sugar': 13.7}
-        },
-        
-        # Juices and beverages - prefer ml
-        'avocado juice': {
-            'preferred_unit': 'ml',
-            'conversions': {'ml': 1, 'cups': 240, 'glasses': 200},
-            'nutrition_per_100g': {'calories': 80, 'protein': 1.5, 'carbs': 8, 'fat': 5, 'fiber': 2, 'sugar': 6}
-        },
-        'orange juice': {
-            'preferred_unit': 'ml',
-            'conversions': {'ml': 1, 'cups': 240, 'glasses': 200},
-            'nutrition_per_100g': {'calories': 45, 'protein': 0.7, 'carbs': 10, 'fat': 0.2, 'fiber': 0.2, 'sugar': 8}
-        },
-        'apple juice': {
-            'preferred_unit': 'ml',
-            'conversions': {'ml': 1, 'cups': 240, 'glasses': 200},
-            'nutrition_per_100g': {'calories': 46, 'protein': 0.1, 'carbs': 11, 'fat': 0.1, 'fiber': 0.2, 'sugar': 10}
-        },
-        'sugar cane juice': {
-            'preferred_unit': 'ml',
-            'conversions': {'ml': 1, 'cups': 240, 'glasses': 200},
-            'nutrition_per_100g': {'calories': 45, 'protein': 0.1, 'carbs': 11, 'fat': 0, 'fiber': 0, 'sugar': 11}
-        },
-        'lime juice': {
-            'preferred_unit': 'ml',
-            'conversions': {'ml': 1, 'cups': 240, 'glasses': 200},
-            'nutrition_per_100g': {'calories': 25, 'protein': 0.4, 'carbs': 8, 'fat': 0.2, 'fiber': 0.4, 'sugar': 1.5}
-        },
-        'lemon juice': {
-            'preferred_unit': 'ml',
-            'conversions': {'ml': 1, 'cups': 240, 'glasses': 200},
-            'nutrition_per_100g': {'calories': 22, 'protein': 0.4, 'carbs': 6.9, 'fat': 0.2, 'fiber': 0.3, 'sugar': 2.5}
-        },
-        'mango juice': {
-            'preferred_unit': 'ml',
-            'conversions': {'ml': 1, 'cups': 240, 'glasses': 200},
-            'nutrition_per_100g': {'calories': 60, 'protein': 0.4, 'carbs': 15, 'fat': 0.2, 'fiber': 0.4, 'sugar': 13}
-        },
-        
-        # Vegetables - prefer pieces or grams
-        'carrot': {
-            'preferred_unit': 'pieces',
-            'conversions': {'pieces': 60, 'slices': 10, 'grams': 1},
-            'nutrition_per_100g': {'calories': 41, 'protein': 0.9, 'carbs': 10, 'fat': 0.2, 'fiber': 2.8, 'sugar': 4.7}
-        },
-        'tomato': {
-            'preferred_unit': 'pieces',
-            'conversions': {'pieces': 100, 'slices': 15, 'grams': 1},
-            'nutrition_per_100g': {'calories': 18, 'protein': 0.9, 'carbs': 3.9, 'fat': 0.2, 'fiber': 1.2, 'sugar': 2.6}
-        },
-        'onion': {
-            'preferred_unit': 'pieces',
-            'conversions': {'pieces': 110, 'slices': 15, 'grams': 1},
-            'nutrition_per_100g': {'calories': 40, 'protein': 1.1, 'carbs': 9.3, 'fat': 0.1, 'fiber': 1.7, 'sugar': 4.2}
-        },
-        'potato': {
-            'preferred_unit': 'pieces',
-            'conversions': {'pieces': 150, 'slices': 20, 'grams': 1},
-            'nutrition_per_100g': {'calories': 77, 'protein': 2, 'carbs': 17, 'fat': 0.1, 'fiber': 2.2, 'sugar': 0.8}
-        },
-        
-        # Proteins
-        'chicken': {
-            'preferred_unit': 'grams',
-            'conversions': {'grams': 1, 'pieces': 150, 'kg': 1000},
-            'nutrition_per_100g': {'calories': 165, 'protein': 31, 'carbs': 0, 'fat': 3.6, 'fiber': 0, 'sugar': 0}
-        },
-        'fish': {
-            'preferred_unit': 'grams',
-            'conversions': {'grams': 1, 'pieces': 120, 'kg': 1000},
-            'nutrition_per_100g': {'calories': 140, 'protein': 25, 'carbs': 0, 'fat': 4, 'fiber': 0, 'sugar': 0}
-        },
-        'egg': {
-            'preferred_unit': 'pieces',
-            'conversions': {'pieces': 50, 'grams': 1},
-            'nutrition_per_100g': {'calories': 155, 'protein': 13, 'carbs': 1.1, 'fat': 11, 'fiber': 0, 'sugar': 1.1}
-        },
-        
-        # Dairy
-        'milk': {
-            'preferred_unit': 'ml',
-            'conversions': {'ml': 1, 'cups': 240, 'glasses': 200},
-            'nutrition_per_100g': {'calories': 42, 'protein': 3.4, 'carbs': 5, 'fat': 1, 'fiber': 0, 'sugar': 5}
-        },
-        'yogurt': {
-            'preferred_unit': 'grams',
-            'conversions': {'grams': 1, 'cups': 240, 'bowls': 150},
-            'nutrition_per_100g': {'calories': 59, 'protein': 10, 'carbs': 3.6, 'fat': 0.4, 'fiber': 0, 'sugar': 3.2}
-        },
-    }
-    
-    # Try exact match first
-    if food_name_lower in food_configs:
-        return food_configs[food_name_lower]
-    
-    # Try partial matches
-    for key in food_configs:
-        if key in food_name_lower or food_name_lower in key:
-            return food_configs[key]
-    
-    # Default config based on food type detection
-    if 'juice' in food_name_lower or 'drink' in food_name_lower:
-        return {
-            'preferred_unit': 'ml',
-            'conversions': {'ml': 1, 'cups': 240, 'glasses': 200},
-            'nutrition_per_100g': {'calories': 40, 'protein': 0.5, 'carbs': 10, 'fat': 0.1, 'fiber': 0.1, 'sugar': 8}
-        }
-    elif 'rice' in food_name_lower or 'grain' in food_name_lower:
-        return {
-            'preferred_unit': 'plates',
-            'conversions': {'plates': 250, 'bowls': 100, 'cups': 180, 'grams': 1},
-            'nutrition_per_100g': {'calories': 130, 'protein': 2.7, 'carbs': 28, 'fat': 0.3, 'fiber': 0.4, 'sugar': 0.1}
-        }
-    else:
-        return {
-            'preferred_unit': 'pieces',
-            'conversions': {'pieces': 100, 'slices': 20, 'grams': 1},
-            'nutrition_per_100g': {'calories': 50, 'protein': 1, 'carbs': 12, 'fat': 0.2, 'fiber': 2, 'sugar': 8}
-        }
-
-def convert_to_grams(quantity, unit, food_name):
-    """Convert any unit to grams for nutrition calculation"""
-    config = get_food_config(food_name)
-    conversions = config.get('conversions', {})
-    
-    # Normalize unit names
-    unit_normalized = normalize_unit(unit)
-    
-    if unit_normalized in conversions:
-        grams = quantity * conversions[unit_normalized]
-        print(f"DEBUG: Converting {quantity} {unit} of {food_name} = {grams}g")
-        return grams
-    
-    # If no conversion found, assume it's already in grams
-    print(f"DEBUG: No conversion for {unit}, assuming grams: {quantity}g")
-    return quantity
-
 def normalize_unit(unit):
     """Normalize unit names to standard forms"""
     if not unit:
@@ -274,41 +69,16 @@ def normalize_unit(unit):
     
     return unit_map.get(unit_lower, unit_lower)
 
-def calculate_nutrition_for_quantity(food_name, quantity, unit):
-    """Calculate nutrition values for a specific quantity"""
-    if not quantity or quantity <= 0:
-        return {'calories': 0, 'protein': 0, 'carbs': 0, 'fat': 0, 'fiber': 0, 'sugar': 0}
-    
-    # Convert to grams first
-    grams = convert_to_grams(quantity, unit, food_name)
-    
-    # Get nutrition per 100g
-    config = get_food_config(food_name)
-    nutrition_per_100g = config.get('nutrition_per_100g', {})
-    
-    # Calculate nutrition for the actual grams
-    ratio = grams / 100.0
-    calculated_nutrition = {}
-    
-    for key, value in nutrition_per_100g.items():
-        calculated_nutrition[key] = round(value * ratio, 2)
-    
-    print(f"DEBUG: Nutrition calculation for {quantity} {unit} of {food_name}:")
-    print(f"DEBUG: Converted to {grams}g, ratio: {ratio}")
-    print(f"DEBUG: Final nutrition: {calculated_nutrition}")
-    
-    return calculated_nutrition
-
 def get_unit_hint(unit):
     """Generate unit hint for the specified unit"""
     unit_hints = {
         'pieces': 'How many pieces?',
-        'plates': 'How many plates?',
-        'bowls': 'How many bowls?',
-        'cups': 'How many cups?',
-        'glasses': 'How many glasses?',
+        'plates': 'How many plates or grams?',
+        'bowls': 'How many bowls or grams?',
+        'cups': 'How many cups or ml?',
+        'glasses': 'How many glasses or ml?',
         'slices': 'How many slices?',
-        'ml': 'How much ml?',
+        'ml': 'How much ml or cups?',
         'grams': 'How many grams?',
         'kg': 'How many kg?'
     }
@@ -331,64 +101,70 @@ def convert_food_to_item_format(food):
         "qty_from": "provided" if food.get('quantity') is not None else "ask"
     }
 
-def extract_food_info_using_openai(text: str):
-    """Enhanced AI-driven food extraction with better food recognition and unit handling"""
-    try:
-        reasoning_prompt = f"""
-        You are analyzing this text: "{text}"
+def extract_food_info_using_ai(text: str):
+    """AI-driven food extraction with OpenAI primary and Gemini fallback"""
+    
+    reasoning_prompt = f"""
+    Analyze this text and extract food information: "{text}"
 
-        FOOD IDENTIFICATION RULES:
-        1. Extract ANY item that could reasonably be food, beverage, or drink
-        2. Include ALL fruits, vegetables, grains, meats, dairy, beverages, juices, snacks
-        3. Be very permissive - if it might be food, include it
-        4. Handle common misspellings and normalize names
-        5. Recognize compound food names (sugarcanjuice = sugar cane juice, etc.)
-        
-        QUANTITY AND UNIT RULES:
-        1. Only set quantity if user explicitly provided a specific amount
-        2. If just food name without quantity, set quantity to null
-        3. Use the most natural unit for each food type:
-           - Rice/grains: prefer "plates" or "bowls"
-           - Juices/liquids: prefer "ml" or "glasses"  
-           - Fruits/vegetables: prefer "pieces"
-           - Meat/protein: prefer "grams"
-        4. If user provides quantity with unit, use their unit
-        5. If user provides just number, use the natural unit for that food
-        
-        EXAMPLES:
-        - "rice" → quantity: null, unit: "plates"
-        - "2 plates rice" → quantity: 2, unit: "plates"  
-        - "500g rice" → quantity: 500, unit: "grams"
-        - "apple juice" → quantity: null, unit: "ml"
-        - "200ml orange juice" → quantity: 200, unit: "ml"
-        - "2 apples" → quantity: 2, unit: "pieces"
+    FOOD IDENTIFICATION:
+    - Extract ALL foods, beverages, drinks, snacks mentioned
+    - Handle misspellings (avacado→avocado, sugarcanjuice→sugar cane juice)
+    - Be very permissive - include anything that could be food
 
-        Return valid JSON:
+    QUANTITY AND UNITS:
+    - If user provided specific quantity, use it exactly
+    - If no quantity provided, set quantity to null
+    - Choose most appropriate unit for each food type:
+      * Rice/grains: plates, bowls, cups
+      * Liquids/juices: ml, glasses, cups  
+      * Fruits/vegetables: pieces, slices
+      * Meat/protein: grams, pieces
+      * Dairy: ml, grams, cups
+
+    NUTRITION CALCULATION (when quantity is provided):
+    - Use these FIXED conversions for calculations:
+      * 1 plate = 300 grams
+      * 1 cup = 200 ml (for liquids) or 200 grams (for solids)
+      * 1 bowl = 200 grams
+      * 1 glass = 200 ml
+    - Calculate nutrition values for the EXACT quantity specified using these conversions
+    - If quantity is null, don't include nutrition values
+    - Provide: calories, protein, carbs, fat, fiber, sugar
+
+    Return valid JSON array:
+    [
         {{
-            "foods": [
-                {{
-                    "name": "normalized_food_name",
-                    "quantity": number_or_null,
-                    "unit": "most_appropriate_unit"
-                }}
-            ]
+            "name": "normalized_food_name",
+            "quantity": number_or_null,
+            "unit": "appropriate_unit",
+            "calories": number_or_null,
+            "protein": number_or_null,
+            "carbs": number_or_null,
+            "fat": number_or_null,
+            "fiber": number_or_null,
+            "sugar": number_or_null
         }}
-        
-        Do NOT include nutrition values in the response - they will be calculated separately.
-        """
+    ]
 
-        # Try OpenAI first
+    EXAMPLES:
+    Input: "rice" → {{"name": "rice", "quantity": null, "unit": "plates"}}
+    Input: "2 plates rice" → {{"name": "rice", "quantity": 2, "unit": "plates", "calories": 780, "protein": 16.2, ...}} (using 2 × 300g = 600g rice)
+    Input: "100ml orange juice" → {{"name": "orange juice", "quantity": 100, "unit": "ml", "calories": 45, ...}}
+    """
+
+    # Try OpenAI first
+    try:
         response = openai_client.chat.completions.create(
             model="gpt-4o",
             messages=[
                 {
                     "role": "system", 
-                    "content": """You are a food recognition expert. Focus only on identifying foods and their quantities/units. 
-                    Be very permissive with food identification and use natural units for each food type."""
+                    "content": "You are a nutrition expert. Use the FIXED conversions provided (1 plate = 300g, 1 cup = 200ml/g) for accurate calculations."
                 },
                 {"role": "user", "content": reasoning_prompt}
             ],
-            max_tokens=800,
+            max_tokens=1000,
             temperature=0.1
         )
 
@@ -396,25 +172,17 @@ def extract_food_info_using_openai(text: str):
         result = re.sub(r"^```json\s*", "", result)
         result = re.sub(r"\s*```$", "", result)
         
-        parsed_result = json.loads(result)
-        foods = parsed_result.get("foods", [])
+        foods = json.loads(result)
+        if not isinstance(foods, list):
+            foods = [foods] if isinstance(foods, dict) else []
         
-        # Process each food to add nutrition info
-        processed_foods = []
+        # Normalize units
         for food in foods:
-            food_name = food.get('name', '').strip()
-            if not food_name:
-                continue
-                
-            # Get preferred unit if none specified
-            if not food.get('unit'):
-                config = get_food_config(food_name)
-                food['unit'] = config.get('preferred_unit', 'pieces')
-            
-            processed_foods.append(food)
+            if food.get('unit'):
+                food['unit'] = normalize_unit(food['unit'])
         
-        print(f"DEBUG: Processed foods: {[(f['name'], f.get('quantity'), f['unit']) for f in processed_foods]}")
-        return {"foods": processed_foods}
+        print(f"DEBUG: OpenAI extracted: {[(f.get('name'), f.get('quantity'), f.get('unit')) for f in foods]}")
+        return {"foods": foods}
 
     except Exception as e:
         print(f"OpenAI extraction error: {e}, trying Gemini fallback...")
@@ -428,64 +196,151 @@ def extract_food_info_using_openai(text: str):
                 result = re.sub(r"^```json\s*", "", result)
                 result = re.sub(r"\s*```$", "", result)
                 
-                parsed_result = json.loads(result)
-                foods = parsed_result.get("foods", [])
+                foods = json.loads(result)
+                if not isinstance(foods, list):
+                    foods = [foods] if isinstance(foods, dict) else []
                 
-                # Process each food to add nutrition info
-                processed_foods = []
+                # Normalize units
                 for food in foods:
-                    food_name = food.get('name', '').strip()
-                    if not food_name:
-                        continue
-                        
-                    # Get preferred unit if none specified
-                    if not food.get('unit'):
-                        config = get_food_config(food_name)
-                        food['unit'] = config.get('preferred_unit', 'pieces')
-                    
-                    processed_foods.append(food)
+                    if food.get('unit'):
+                        food['unit'] = normalize_unit(food['unit'])
                 
-                print(f"DEBUG: Gemini fallback processed foods: {[(f['name'], f.get('quantity'), f['unit']) for f in processed_foods]}")
-                return {"foods": processed_foods}
+                print(f"DEBUG: Gemini extracted: {[(f.get('name'), f.get('quantity'), f.get('unit')) for f in foods]}")
+                return {"foods": foods}
                 
         except Exception as gemini_error:
             print(f"Gemini extraction error: {gemini_error}")
         
-        # Enhanced fallback parsing
-        text_lower = text.lower().strip()
-        
-        # Handle common corrections
-        corrections = {
-            'avacado': 'avocado', 'avacadojuice': 'avocado juice',
-            'sugarcanjuice': 'sugar cane juice', 'orangejuice': 'orange juice'
-        }
-        
-        for wrong, correct in corrections.items():
-            text_lower = text_lower.replace(wrong, correct)
-        
+        # Simple fallback parsing
+        print("Both AI models failed, using fallback parsing...")
+        return parse_food_fallback(text)
+
+def parse_food_fallback(text):
+    """Simple fallback when both AI models fail"""
+    text_lower = text.lower().strip()
+    
+    # Handle common misspellings
+    corrections = {
+        'avacado': 'avocado', 'avacadojuice': 'avocado juice',
+        'sugarcanjuice': 'sugar cane juice', 'orangejuice': 'orange juice'
+    }
+    
+    for wrong, correct in corrections.items():
+        text_lower = text_lower.replace(wrong, correct)
+    
+    # Split multiple foods by comma
+    food_items = [item.strip() for item in text_lower.split(',')]
+    foods = []
+    
+    for item in food_items:
         # Extract quantity and unit
-        quantity_match = re.search(r'(\d+(?:\.\d+)?)\s*(g|grams?|plates?|bowls?|pieces?|ml|glasses?|cups?|kg)?', text_lower)
+        quantity_match = re.search(r'(\d+(?:\.\d+)?)\s*(\w+)?', item)
         
         if quantity_match:
             quantity = float(quantity_match.group(1))
-            unit = quantity_match.group(2) if quantity_match.group(2) else None
+            unit_part = quantity_match.group(2)
+            food_name = re.sub(r'\d+(?:\.\d+)?\s*\w*', '', item).strip()
         else:
             quantity = None
-            unit = None
-        
-        # Get food name (remove quantity part)
-        food_name = re.sub(r'\d+(?:\.\d+)?\s*\w*', '', text_lower).strip()
+            unit_part = None
+            food_name = item
         
         if food_name:
-            config = get_food_config(food_name)
-            if not unit:
-                unit = config.get('preferred_unit', 'pieces')
+            # Determine appropriate unit
+            if 'juice' in food_name or 'milk' in food_name:
+                unit = 'ml'
+            elif 'rice' in food_name or 'curry' in food_name:
+                unit = 'plates'
+            elif any(fruit in food_name for fruit in ['apple', 'banana', 'orange']):
+                unit = 'pieces'
             else:
-                unit = normalize_unit(unit)
+                unit = 'pieces'
             
-            return {"foods": [{"name": food_name,"unit": unit,"quantity": quantity,}]}
+            if unit_part:
+                unit = normalize_unit(unit_part)
+            
+            foods.append({
+                "name": food_name,
+                "quantity": quantity,
+                "unit": unit,
+                "calories": None,
+                "protein": None,
+                "carbs": None,
+                "fat": None,
+                "fiber": None,
+                "sugar": None
+            })
+    
+    return {"foods": foods}
+
+def calculate_nutrition_using_ai(food_name, quantity, unit):
+    """Use AI to calculate nutrition for specific quantity with fixed conversions"""
+    try:
+        prompt = f"""
+        Calculate nutrition for: {quantity} {unit} of {food_name}
         
-        return {"foods": []}
+        Use these FIXED conversions:
+        - 1 plate = 300 grams
+        - 1 cup = 200 ml (for liquids) or 200 grams (for solids)
+        - 1 bowl = 200 grams
+        - 1 glass = 200 ml
+        
+        Return JSON with exact values for this serving:
+        {{
+            "calories": number,
+            "protein": number,
+            "carbs": number,
+            "fat": number,
+            "fiber": number,
+            "sugar": number
+        }}
+        
+        Be accurate based on the actual portion size using the fixed conversions.
+        """
+        
+        # Try OpenAI first
+        try:
+            response = openai_client.chat.completions.create(
+                model="gpt-4o-mini",  # Use cheaper model for nutrition calculation
+                messages=[
+                    {"role": "system", "content": "You are a nutrition expert. Use the FIXED conversions: 1 plate = 300g, 1 cup = 200ml/g, 1 bowl = 200g, 1 glass = 200ml."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=200,
+                temperature=0
+            )
+            
+            result = response.choices[0].message.content.strip()
+            result = re.sub(r"^```json\s*", "", result)
+            result = re.sub(r"\s*```$", "", result)
+            
+            nutrition = json.loads(result)
+            return nutrition
+            
+        except Exception as openai_error:
+            print(f"OpenAI nutrition error: {openai_error}, trying Gemini...")
+            
+            # Gemini fallback
+            response = gemini_model.generate_content(prompt)
+            if response.text:
+                result = response.text.strip()
+                result = re.sub(r"^```json\s*", "", result)
+                result = re.sub(r"\s*```$", "", result)
+                
+                nutrition = json.loads(result)
+                return nutrition
+    
+    except Exception as e:
+        print(f"AI nutrition calculation failed: {e}")
+        # Return default values
+        return {
+            "calories": 0,
+            "protein": 0,
+            "carbs": 0,
+            "fat": 0,
+            "fiber": 0,
+            "sugar": 0
+        }
 
 def is_food_related(text):
     """Enhanced food detection"""
@@ -563,7 +418,6 @@ def create_food_log_response_with_message(logged_foods):
         "is_log": True,
         "message": message,
         "items": items,
-
     }
 
 @router.get("/chat/stream_test", dependencies=[Depends(RateLimiter(times=30, seconds=60))])
@@ -587,7 +441,7 @@ async def chat_stream(
         text = text.strip()
         print(f"DEBUG: Processing text: '{text}'")
         
-        # Check for pending state and debug
+        # Check for pending state
         pending_state = await mem.get_pending(user_id)
         print(f"DEBUG: Current pending state: {pending_state}")
         
@@ -618,7 +472,7 @@ async def chat_stream(
             elif is_food_related(text):
                 print("DEBUG: User entered food during nav confirmation, clearing state")
                 await mem.clear_pending(user_id)
-                # Continue to food processing below (don't return here)
+                # Continue to food processing below
             
             else:
                 print("DEBUG: User input not recognized, asking for nav confirmation again")
@@ -638,8 +492,17 @@ async def chat_stream(
                 print("DEBUG: User wants to log pending foods")
                 first_pending = pending_foods[0] if pending_foods else None
                 if first_pending:
+                    # Use improved question format with alternatives
                     if first_pending['unit'] == 'ml':
-                        ask_message = f"How many ml or cups of {first_pending['name']} did you have?"
+                        ask_message = f"How much ml or cups of {first_pending['name']} did you have?"
+                    elif first_pending['unit'] == 'plates':
+                        ask_message = f"How many plates or grams of {first_pending['name']} did you have?"
+                    elif first_pending['unit'] == 'bowls':
+                        ask_message = f"How many bowls or grams of {first_pending['name']} did you have?"
+                    elif first_pending['unit'] == 'cups':
+                        ask_message = f"How many cups or ml of {first_pending['name']} did you have?"
+                    elif first_pending['unit'] == 'glasses':
+                        ask_message = f"How many glasses or ml of {first_pending['name']} did you have?"
                     else:
                         ask_message = f"How many {first_pending['unit']} of {first_pending['name']} did you have?"
                                         
@@ -663,8 +526,6 @@ async def chat_stream(
                 await mem.clear_pending(user_id)
                 
                 if logged_foods:
-                    items = [convert_food_to_item_format(food) for food in logged_foods]
-                    
                     async def _final_logged():
                         response_data = create_food_log_response_with_message(logged_foods)
                         yield sse_json(response_data)
@@ -716,7 +577,7 @@ async def chat_stream(
                 if is_food_related(text) and not is_quantity_input(text):
                     print("DEBUG: User entered new food during quantity request")
                     # User entered new food, extract it
-                    new_food_info = extract_food_info_using_openai(text)
+                    new_food_info = extract_food_info_using_ai(text)
                     new_foods = new_food_info.get("foods", [])
                     
                     if new_foods:
@@ -724,13 +585,8 @@ async def chat_stream(
                         foods_with_quantity = [f for f in new_foods if f.get("quantity") is not None]
                         foods_without_quantity = [f for f in new_foods if f.get("quantity") is None]
                         
-                        # Calculate nutrition for foods with quantities and add to logged
-                        for food in foods_with_quantity:
-                            nutrition = calculate_nutrition_for_quantity(
-                                food['name'], food['quantity'], food['unit']
-                            )
-                            food.update(nutrition)
-                            logged_foods.append(food)
+                        # Add foods with quantities to logged
+                        logged_foods.extend(foods_with_quantity)
                         
                         # Combine all pending foods (previous + new without quantity)
                         all_pending_foods = foods + foods_without_quantity
@@ -764,10 +620,10 @@ async def chat_stream(
                             else:
                                 # No pending foods, just log and finish
                                 await mem.clear_pending(user_id)
-                                items = [convert_food_to_item_format(food) for food in logged_foods]
                                 
                                 async def _final_log():
-                                    yield sse_json({"type":"food_log","status":"logged","is_log":True,"items":items})
+                                    response_data = create_food_log_response_with_message(logged_foods)
+                                    yield sse_json(response_data)
                                     yield "event: ping\ndata: {}\n\n"
                                     yield "event: done\ndata: [DONE]\n\n"
                                     await mem.set_pending(user_id, {"state":"awaiting_nav_confirm"})
@@ -807,8 +663,8 @@ async def chat_stream(
                     foods[current_index]["quantity"] = quantity_value
                     foods[current_index]["unit"] = final_unit
                     
-                    # Calculate nutrition
-                    nutrition = calculate_nutrition_for_quantity(
+                    # Calculate nutrition using AI
+                    nutrition = calculate_nutrition_using_ai(
                         current_food['name'], quantity_value, final_unit
                     )
                     foods[current_index].update(nutrition)
@@ -825,8 +681,17 @@ async def chat_stream(
                     
                     if next_food_index != -1:
                         next_food = foods[next_food_index]
+                        # Use improved question format with alternatives
                         if next_food['unit'] == 'ml':
-                            ask_message = f"How many ml or cups of {next_food['name']} did you have?"
+                            ask_message = f"How much ml or cups of {next_food['name']} did you have?"
+                        elif next_food['unit'] == 'plates':
+                            ask_message = f"How many plates or grams of {next_food['name']} did you have?"
+                        elif next_food['unit'] == 'bowls':
+                            ask_message = f"How many bowls or grams of {next_food['name']} did you have?"
+                        elif next_food['unit'] == 'cups':
+                            ask_message = f"How many cups or ml of {next_food['name']} did you have?"
+                        elif next_food['unit'] == 'glasses':
+                            ask_message = f"How many glasses or ml of {next_food['name']} did you have?"
                         else:
                             ask_message = f"How many {next_food['unit']} of {next_food['name']} did you have?"
                         
@@ -848,9 +713,6 @@ async def chat_stream(
                         # All foods processed, log everything
                         print("DEBUG: All foods processed, logging")
                         await mem.clear_pending(user_id)
-                        
-                        # Convert to items format
-                        items = [convert_food_to_item_format(food) for food in logged_foods]
                         
                         async def _logged_then_nav():
                             response_data = create_food_log_response_with_message(logged_foods)
@@ -895,9 +757,9 @@ async def chat_stream(
             return StreamingResponse(_not_food(), media_type="text/event-stream",
                                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
-        # Extract food information
+        # Extract food information using AI
         print(f"DEBUG: Extracting food info from: '{text}'")
-        food_info = extract_food_info_using_openai(text)
+        food_info = extract_food_info_using_ai(text)
         foods = food_info.get("foods", [])
         print(f"DEBUG: Extracted foods: {foods}")
         
@@ -916,14 +778,8 @@ async def chat_stream(
         print(f"DEBUG: Foods with quantity: {foods_with_quantity}")
         print(f"DEBUG: Foods without quantity: {foods_without_quantity}")
 
-        # Calculate nutrition for foods with quantities
-        logged_foods = []
-        for food in foods_with_quantity:
-            nutrition = calculate_nutrition_for_quantity(
-                food['name'], food['quantity'], food['unit']
-            )
-            food.update(nutrition)
-            logged_foods.append(food)
+        # Foods with quantities are already processed by AI (have nutrition)
+        logged_foods = foods_with_quantity
 
         if foods_without_quantity:
             if logged_foods:
@@ -952,8 +808,17 @@ async def chat_stream(
             else:
                 # No foods with quantities, ask for first one's quantity
                 first_food = foods_without_quantity[0]
+                # Use improved question format with alternatives
                 if first_food['unit'] == 'ml':
-                    ask_message = f"How many ml or cups of {first_food['name']} did you have?"
+                    ask_message = f"How much ml or cups of {first_food['name']} did you have?"
+                elif first_food['unit'] == 'plates':
+                    ask_message = f"How many plates or grams of {first_food['name']} did you have?"
+                elif first_food['unit'] == 'bowls':
+                    ask_message = f"How many bowls or grams of {first_food['name']} did you have?"
+                elif first_food['unit'] == 'cups':
+                    ask_message = f"How many cups or ml of {first_food['name']} did you have?"
+                elif first_food['unit'] == 'glasses':
+                    ask_message = f"How many glasses or ml of {first_food['name']} did you have?"
                 else:
                     ask_message = f"How many {first_food['unit']} of {first_food['name']} did you have?"
                 
@@ -974,7 +839,6 @@ async def chat_stream(
         else:
             # All foods have quantities, log immediately
             print("DEBUG: All foods have quantities, logging immediately")
-            items = [convert_food_to_item_format(food) for food in logged_foods]
             
             async def _logged_then_nav():
                 response_data = create_food_log_response_with_message(logged_foods)
@@ -1018,8 +882,10 @@ def is_quantity_input(text):
     
     # Check for pure numbers or numbers with units
     quantity_patterns = [
-        r'^\d+(?:\.\d+)?,  # Just numbers: 2, 1.5, 100'
-        r'^\d+(?:\.\d+)?\s*(g|grams?|kg|plates?|bowls?|pieces?|ml|glasses?|cups?|slices?)'  # Numbers with units
+        r'^\d+(?:\.\d+)?'
+                        ,  # Just numbers: 2, 1.5, 100
+        r'^\d+(?:\.\d+)?\s*(g|grams?|kg|plates?|bowls?|pieces?|ml|glasses?|cups?|slices?)'
+                          # Numbers with units
     ]
     
     return any(re.match(pattern, text_lower) for pattern in quantity_patterns)
@@ -1061,9 +927,6 @@ def parse_quantity_and_unit(text, food_name):
 class Userid(BaseModel):
     user_id: int
 
-
-
-
 @router.get("/debug_pending")
 async def debug_pending(
     user_id: int,
@@ -1082,6 +945,8 @@ async def chat_close(
     pending_key = f"chat:{req.user_id}:pending"
     deleted = await mem.r.delete(history_key, pending_key)
     return {"status": 200}
+
+@router.post("/clear_pending")
 async def clear_pending_state(
     req: Userid,
     mem = Depends(get_mem),
