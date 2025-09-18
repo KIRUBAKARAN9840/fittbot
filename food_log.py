@@ -332,52 +332,52 @@ def convert_food_to_item_format(food):
     }
 
 def extract_food_info_using_openai(text: str):
-    """Enhanced AI-driven food extraction with OpenAI primary and Gemini fallback"""
-    reasoning_prompt = f"""
-    You are analyzing this text: "{text}"
-
-    FOOD IDENTIFICATION RULES:
-    1. Extract ANY item that could reasonably be food, beverage, or drink
-    2. Include ALL fruits, vegetables, grains, meats, dairy, beverages, juices, snacks
-    3. Be very permissive - if it might be food, include it
-    4. Handle common misspellings and normalize names
-    5. Recognize compound food names (sugarcanjuice = sugar cane juice, etc.)
-    
-    QUANTITY AND UNIT RULES:
-    1. Only set quantity if user explicitly provided a specific amount
-    2. If just food name without quantity, set quantity to null
-    3. Use the most natural unit for each food type:
-       - Rice/grains: prefer "plates" or "bowls"
-       - Juices/liquids: prefer "ml" or "glasses"  
-       - Fruits/vegetables: prefer "pieces"
-       - Meat/protein: prefer "grams"
-    4. If user provides quantity with unit, use their unit
-    5. If user provides just number, use the natural unit for that food
-    
-    EXAMPLES:
-    - "rice" → quantity: null, unit: "plates"
-    - "2 plates rice" → quantity: 2, unit: "plates"  
-    - "500g rice" → quantity: 500, unit: "grams"
-    - "apple juice" → quantity: null, unit: "ml"
-    - "200ml orange juice" → quantity: 200, unit: "ml"
-    - "2 apples" → quantity: 2, unit: "pieces"
-
-    Return valid JSON:
-    {{
-        "foods": [
-            {{
-                "name": "normalized_food_name",
-                "quantity": number_or_null,
-                "unit": "most_appropriate_unit"
-            }}
-        ]
-    }}
-    
-    Do NOT include nutrition values in the response - they will be calculated separately.
-    """
-
-    # Try OpenAI first
+    """Enhanced AI-driven food extraction with better food recognition and unit handling"""
     try:
+        reasoning_prompt = f"""
+        You are analyzing this text: "{text}"
+
+        FOOD IDENTIFICATION RULES:
+        1. Extract ANY item that could reasonably be food, beverage, or drink
+        2. Include ALL fruits, vegetables, grains, meats, dairy, beverages, juices, snacks
+        3. Be very permissive - if it might be food, include it
+        4. Handle common misspellings and normalize names
+        5. Recognize compound food names (sugarcanjuice = sugar cane juice, etc.)
+        
+        QUANTITY AND UNIT RULES:
+        1. Only set quantity if user explicitly provided a specific amount
+        2. If just food name without quantity, set quantity to null
+        3. Use the most natural unit for each food type:
+           - Rice/grains: prefer "plates" or "bowls"
+           - Juices/liquids: prefer "ml" or "glasses"  
+           - Fruits/vegetables: prefer "pieces"
+           - Meat/protein: prefer "grams"
+        4. If user provides quantity with unit, use their unit
+        5. If user provides just number, use the natural unit for that food
+        
+        EXAMPLES:
+        - "rice" → quantity: null, unit: "plates"
+        - "2 plates rice" → quantity: 2, unit: "plates"  
+        - "500g rice" → quantity: 500, unit: "grams"
+        - "apple juice" → quantity: null, unit: "ml"
+        - "200ml orange juice" → quantity: 200, unit: "ml"
+        - "2 apples" → quantity: 2, unit: "pieces"
+
+        Return valid JSON:
+        {{
+            "foods": [
+                {{
+                    "name": "normalized_food_name",
+                    "quantity": number_or_null,
+                    "unit": "most_appropriate_unit"
+                }}
+            ]
+        }}
+        
+        Do NOT include nutrition values in the response - they will be calculated separately.
+        """
+
+        # Try OpenAI first
         response = openai_client.chat.completions.create(
             model="gpt-4o",
             messages=[
@@ -413,7 +413,7 @@ def extract_food_info_using_openai(text: str):
             
             processed_foods.append(food)
         
-        print(f"DEBUG: OpenAI processed foods: {[(f['name'], f.get('quantity'), f['unit']) for f in processed_foods]}")
+        print(f"DEBUG: Processed foods: {[(f['name'], f.get('quantity'), f['unit']) for f in processed_foods]}")
         return {"foods": processed_foods}
 
     except Exception as e:
@@ -445,13 +445,13 @@ def extract_food_info_using_openai(text: str):
                     
                     processed_foods.append(food)
                 
-                print(f"DEBUG: Gemini processed foods: {[(f['name'], f.get('quantity'), f['unit']) for f in processed_foods]}")
+                print(f"DEBUG: Gemini fallback processed foods: {[(f['name'], f.get('quantity'), f['unit']) for f in processed_foods]}")
                 return {"foods": processed_foods}
                 
         except Exception as gemini_error:
             print(f"Gemini extraction error: {gemini_error}")
         
-        # Enhanced fallback parsing if both AI models fail
+        # Enhanced fallback parsing
         text_lower = text.lower().strip()
         
         # Handle common corrections
@@ -1019,7 +1019,7 @@ def is_quantity_input(text):
     # Check for pure numbers or numbers with units
     quantity_patterns = [
         r'^\d+(?:\.\d+)?,  # Just numbers: 2, 1.5, 100'
-        r'^\d+(?:\.\d+)?\s*(g|grams?|kg|plates?|bowls?|pieces?|ml|glasses?|cups?|slices?)'  # Numbers with units'
+        r'^\d+(?:\.\d+)?\s*(g|grams?|kg|plates?|bowls?|pieces?|ml|glasses?|cups?|slices?)'  # Numbers with units
     ]
     
     return any(re.match(pattern, text_lower) for pattern in quantity_patterns)
