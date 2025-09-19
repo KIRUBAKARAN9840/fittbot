@@ -122,6 +122,12 @@ def extract_food_info_using_ai(text: str):
       * Meat/protein: grams, pieces
       * Dairy: ml, grams, cups
 
+    SMART UNIT LOGIC (when only number provided without unit):
+    - For liquids/juices: quantity ≤5 = cups, quantity >5 = ml
+    - For rice/grains: quantity ≤5 = plates, quantity >5 = grams  
+    - For meat/protein: always grams
+    - For fruits: always pieces
+
     NUTRITION CALCULATION (when quantity is provided):
     - Use these FIXED conversions for calculations:
       * 1 plate = 300 grams
@@ -246,18 +252,24 @@ def parse_food_fallback(text):
             food_name = item
         
         if food_name:
-            # Determine appropriate unit
-            if 'juice' in food_name or 'milk' in food_name:
-                unit = 'ml'
-            elif 'rice' in food_name or 'curry' in food_name:
-                unit = 'plates'
-            elif any(fruit in food_name for fruit in ['apple', 'banana', 'orange']):
-                unit = 'pieces'
-            else:
-                unit = 'pieces'
-            
             if unit_part:
                 unit = normalize_unit(unit_part)
+            else:
+                # Use smart unit logic if only quantity provided
+                if quantity is not None:
+                    unit = get_smart_unit_for_quantity(quantity, food_name)
+                else:
+                    # Default unit when no quantity - fix chicken to use grams
+                    if 'juice' in food_name or 'milk' in food_name or 'drink' in food_name:
+                        unit = 'ml'
+                    elif 'rice' in food_name or 'curry' in food_name:
+                        unit = 'plates'
+                    elif 'chicken' in food_name or 'meat' in food_name or 'fish' in food_name:
+                        unit = 'grams'  # Fix: chicken should use grams
+                    elif any(fruit in food_name for fruit in ['apple', 'banana', 'orange']):
+                        unit = 'pieces'
+                    else:
+                        unit = 'pieces'
             
             foods.append({
                 "name": food_name,
@@ -285,36 +297,52 @@ def calculate_nutrition_using_ai(food_name, quantity, unit):
         - 1 bowl = 200 grams
         - 1 glass = 200 ml
         
-        Return JSON with exact values for this serving:
+        First convert to base units (grams or ml), then calculate nutrition.
+        
+        Example: "2 pieces of chicken" = assume 100g per piece = 200g total
+        Example: "2 cups orange juice" = 2 × 200ml = 400ml total
+        
+        Return ONLY valid JSON:
         {{
-            "calories": number,
-            "protein": number,
-            "carbs": number,
-            "fat": number,
-            "fiber": number,
-            "sugar": number
+            "calories": 165,
+            "protein": 31,
+            "carbs": 0,
+            "fat": 3.6,
+            "fiber": 0,
+            "sugar": 0
         }}
         
-        Be accurate based on the actual portion size using the fixed conversions.
+        Provide realistic nutrition values, not zeros.
         """
+        
+        print(f"DEBUG: Calculating nutrition for {quantity} {unit} of {food_name}")
         
         # Try OpenAI first
         try:
             response = openai_client.chat.completions.create(
-                model="gpt-4o-mini",  # Use cheaper model for nutrition calculation
+                model="gpt-4o-mini",
                 messages=[
-                    {"role": "system", "content": "You are a nutrition expert. Use the FIXED conversions: 1 plate = 300g, 1 cup = 200ml/g, 1 bowl = 200g, 1 glass = 200ml."},
+                    {"role": "system", "content": "You are a nutrition expert. Always return realistic nutrition values, never all zeros. Use the fixed conversions provided."},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=200,
+                max_tokens=300,
                 temperature=0
             )
             
             result = response.choices[0].message.content.strip()
+            print(f"DEBUG: OpenAI nutrition response: {result}")
+            
             result = re.sub(r"^```json\s*", "", result)
             result = re.sub(r"\s*```$", "", result)
             
             nutrition = json.loads(result)
+            print(f"DEBUG: Parsed nutrition: {nutrition}")
+            
+            # Validate nutrition values - ensure they're not all zeros
+            if all(v == 0 for v in nutrition.values()):
+                print("DEBUG: OpenAI returned all zeros, trying fallback")
+                raise Exception("All nutrition values are zero")
+            
             return nutrition
             
         except Exception as openai_error:
@@ -324,23 +352,70 @@ def calculate_nutrition_using_ai(food_name, quantity, unit):
             response = gemini_model.generate_content(prompt)
             if response.text:
                 result = response.text.strip()
+                print(f"DEBUG: Gemini nutrition response: {result}")
+                
                 result = re.sub(r"^```json\s*", "", result)
                 result = re.sub(r"\s*```$", "", result)
                 
                 nutrition = json.loads(result)
+                print(f"DEBUG: Parsed Gemini nutrition: {nutrition}")
+                
+                # Validate nutrition values
+                if all(v == 0 for v in nutrition.values()):
+                    print("DEBUG: Gemini also returned all zeros, using fallback values")
+                    raise Exception("All nutrition values are zero")
+                
                 return nutrition
     
     except Exception as e:
-        print(f"AI nutrition calculation failed: {e}")
-        # Return default values
-        return {
-            "calories": 0,
-            "protein": 0,
-            "carbs": 0,
-            "fat": 0,
-            "fiber": 0,
-            "sugar": 0
-        }
+        print(f"AI nutrition calculation failed: {e}, using fallback values")
+        
+        # Return realistic fallback values based on food type
+        return get_fallback_nutrition(food_name, quantity, unit)
+
+def get_fallback_nutrition(food_name, quantity, unit):
+    """Provide realistic fallback nutrition values when AI fails"""
+    food_lower = food_name.lower()
+    
+    # Convert to approximate grams for calculation
+    if unit == 'plates':
+        grams = quantity * 300
+    elif unit == 'cups':
+        grams = quantity * 200  # Assume 200g/ml per cup
+    elif unit == 'pieces':
+        if 'chicken' in food_lower:
+            grams = quantity * 100  # 100g per piece of chicken
+        elif 'pizza' in food_lower:
+            grams = quantity * 50   # 50g per slice of pizza
+        else:
+            grams = quantity * 80   # Default piece weight
+    elif unit == 'grams':
+        grams = quantity
+    elif unit == 'ml':
+        grams = quantity  # For liquids, use ml as grams for calculation
+    else:
+        grams = quantity * 80  # Default
+    
+    # Basic nutrition per 100g
+    if 'chicken' in food_lower:
+        per_100g = {"calories": 165, "protein": 31, "carbs": 0, "fat": 3.6, "fiber": 0, "sugar": 0}
+    elif 'pizza' in food_lower:
+        per_100g = {"calories": 266, "protein": 11, "carbs": 33, "fat": 10, "fiber": 2, "sugar": 4}
+    elif 'juice' in food_lower:
+        per_100g = {"calories": 45, "protein": 0.7, "carbs": 10, "fat": 0.2, "fiber": 0.2, "sugar": 8}
+    elif 'rice' in food_lower:
+        per_100g = {"calories": 130, "protein": 2.7, "carbs": 28, "fat": 0.3, "fiber": 0.4, "sugar": 0.1}
+    else:
+        per_100g = {"calories": 50, "protein": 2, "carbs": 10, "fat": 1, "fiber": 1, "sugar": 2}
+    
+    # Calculate for actual portion
+    ratio = grams / 100.0
+    nutrition = {}
+    for key, value in per_100g.items():
+        nutrition[key] = round(value * ratio, 1)
+    
+    print(f"DEBUG: Fallback nutrition for {grams}g of {food_name}: {nutrition}")
+    return nutrition
 
 def is_food_related(text):
     """Enhanced food detection"""
@@ -891,7 +966,7 @@ def is_quantity_input(text):
     return any(re.match(pattern, text_lower) for pattern in quantity_patterns)
     
 def parse_quantity_and_unit(text, food_name):
-    """Enhanced quantity and unit parsing"""
+    """Enhanced quantity and unit parsing with smart unit interpretation"""
     text_lower = text.lower().strip()
     
     # Pattern matching for different input formats
@@ -917,12 +992,48 @@ def parse_quantity_and_unit(text, food_name):
                     unit = 'grams'
                 else:
                     unit = normalize_unit(unit)
+            else:
+                # Smart unit interpretation when no unit is provided
+                unit = get_smart_unit_for_quantity(quantity, food_name)
             
-            print(f"DEBUG: Parsed '{text}' as {quantity} {unit}")
+            print(f"DEBUG: Parsed '{text}' as {quantity} {unit} for {food_name}")
             return quantity, unit
         
     print(f"DEBUG: Could not parse quantity from '{text}'")
     return None, None
+
+def get_smart_unit_for_quantity(quantity, food_name):
+    """Determine appropriate unit based on quantity and food type"""
+    food_lower = food_name.lower()
+    
+    # For liquids/juices
+    if any(liquid in food_lower for liquid in ['juice', 'milk', 'water', 'drink', 'tea', 'coffee']):
+        if quantity <= 5:
+            return 'cups'  # Small numbers = cups
+        else:
+            return 'ml'    # Large numbers = ml
+    
+    # For rice/grains/curry
+    elif any(grain in food_lower for grain in ['rice', 'curry', 'dal', 'grain', 'wheat', 'quinoa']):
+        if quantity <= 5:
+            return 'plates'  # Small numbers = plates
+        else:
+            return 'grams'   # Large numbers = grams
+    
+    # For meat/protein
+    elif any(protein in food_lower for protein in ['chicken', 'fish', 'meat', 'beef', 'pork']):
+        return 'grams'  # Always grams for meat
+    
+    # For fruits/vegetables
+    elif any(fruit in food_lower for fruit in ['apple', 'banana', 'orange', 'mango']):
+        return 'pieces'  # Always pieces for fruits
+    
+    # Default logic
+    else:
+        if quantity <= 5:
+            return 'pieces'  # Small numbers likely pieces
+        else:
+            return 'grams'   # Large numbers likely grams
 
 class Userid(BaseModel):
     user_id: int
