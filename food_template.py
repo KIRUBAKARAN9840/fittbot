@@ -622,9 +622,9 @@ Create UNIQUE daily variations - each day should have different main meals even 
                 
         except Exception as e:
             print(f"Error regenerating {day}: {e}")
-            # Use fallback for this day
-            fallback_data = create_fallback_meal_plan(day, diet_type, cuisine_type, profile, previous_meals)
-            day_template = convert_ai_meal_to_template(fallback_data)
+            # Note: create_fallback_meal_plan function has been removed
+            # Using get_meal_template() as basic fallback
+            day_template = get_meal_template()
             new_meal_plan[day.lower()] = day_template
     
     print(f"DEBUG: Successfully regenerated {len(new_meal_plan)} unique daily plans")
@@ -678,69 +678,6 @@ def validate_and_adjust_calories(meal_data, target_calories, max_attempts=3):
   
    current_calories = calculate_total_calories(meal_data)
    tolerance = target_calories * 0.13 # Allow 15% tolerance
-  
-   print(f"DEBUG: Current calories: {current_calories}, Target: {target_calories}")
-  
-   if abs(current_calories - target_calories) <= tolerance:
-       print(f"DEBUG: Calories within tolerance")
-       return meal_data
-  
-   # Calculate adjustment factor
-   if current_calories > 0:
-       scale_factor = target_calories / current_calories
-       print(f"DEBUG: Scaling meals by factor: {scale_factor:.2f}")
-       return scale_meal_calories(meal_data, scale_factor)
-  
-   return meal_data
-
-
-def calculate_meal_calories_distribution(target_calories):
-   """Calculate calorie distribution across meal slots"""
-   distributions = {
-       "1": 0.02,  # Early Morning Detox - 2%
-       "2": 0.05,  # Pre-Breakfast Starter - 5%
-       "3": 0.25,  # Breakfast - 25%
-       "4": 0.10,  # Mid-Morning Snack - 10%
-       "5": 0.35,  # Lunch - 35%
-       "6": 0.10,  # Evening Snack - 10%
-       "7": 0.25   # Dinner - 25%
-   }
-  
-   # Allow ±10% flexibility per slot
-   slot_calories = {}
-   for slot_id, percentage in distributions.items():
-       base_calories = target_calories * percentage
-       slot_calories[slot_id] = {
-           "target": round(base_calories),
-           "min": round(base_calories * 0.9),
-           "max": round(base_calories * 1.1)
-       }
-  
-   return slot_calories
-
-
-def validate_and_adjust_calories(meal_data, target_calories, max_attempts=3):
-   """Validate total calories and adjust if needed"""
-  
-   def calculate_total_calories(meal_data):
-       total = 0
-       for meal_slot in meal_data.get("meals", []):
-           for food in meal_slot.get("foods", []):
-               total += food.get("calories", 0)
-       return total
-  
-   def scale_meal_calories(meal_data, scale_factor):
-       """Scale all calories in the meal plan by a factor"""
-       for meal_slot in meal_data.get("meals", []):
-           for food in meal_slot.get("foods", []):
-               food["calories"] = round(food["calories"] * scale_factor)
-               food["protein"] = round(food["protein"] * scale_factor, 1)
-               food["carbs"] = round(food["carbs"] * scale_factor, 1)
-               food["fat"] = round(food["fat"] * scale_factor, 1)
-       return meal_data
-  
-   current_calories = calculate_total_calories(meal_data)
-   tolerance = target_calories * 0.15  # Allow 15% tolerance
   
    print(f"DEBUG: Current calories: {current_calories}, Target: {target_calories}")
   
@@ -964,7 +901,15 @@ Return ONLY valid JSON - no markdown formatting or extra text."""
         print(f"AI meal generation error for {day_name}: {e}")
         print(f"AI generation traceback: {traceback.format_exc()}")
         print(f"DEBUG: Falling back to default meal plan for {day_name}")
-        return create_fallback_meal_plan(day_name, diet_type, cuisine_type, profile, previous_meals)
+        # Using get_meal_template() as basic fallback
+        return {
+            "day_name": day_name,
+            "total_target_calories": target_calories,
+            "meals": [
+                {"slot_id": str(i+1), "target_calories": 0, "foods": []}
+                for i in range(7)
+            ]
+        }
 
 
 def get_curry_suggestions(diet_type, cuisine):
@@ -993,78 +938,6 @@ def get_slot_name(slot_id):
    return slot_names.get(slot_id, f"Slot {slot_id}")
 
 
-# def create_fallback_meal_plan(day_name, diet_type, cuisine_type, profile, previous_meals=None):
-#    """Create a fallback meal plan with accurate calories"""
-#    target_calories = profile['target_calories']
-#    slot_calories = calculate_meal_calories_distribution(target_calories)
-  
-#    # Create basic fallback based on cuisine and diet type
-#    fallback_meals = []
-  
-#    for slot_id in ["1", "2", "3", "4", "5", "6", "7"]:
-#        slot_target = slot_calories[slot_id]["target"]
-      
-#        if slot_id == "1":  # Early Morning
-#            foods = [{"name": "Warm lemon water", "calories": slot_target, "protein": 0, "carbs": 2, "fat": 0, "quantity": "250 ml"}]
-#        elif slot_id == "2":  # Pre-breakfast
-#            foods = [{"name": "Soaked almonds", "calories": slot_target, "protein": 3, "carbs": 2, "fat": 5, "quantity": "5 pieces"}]
-#        elif slot_id == "3":  # Breakfast
-#            if cuisine_type == "south_indian":
-#                foods = [
-#                    {"name": "Idli", "calories": int(slot_target * 0.6), "protein": 8, "carbs": 40, "fat": 2, "quantity": "4 pieces"},
-#                    {"name": "Sambar", "calories": int(slot_target * 0.3), "protein": 5, "carbs": 15, "fat": 3, "quantity": "150 ml"},
-#                    {"name": "Coconut chutney", "calories": int(slot_target * 0.1), "protein": 1, "carbs": 3, "fat": 2, "quantity": "20 grams"}
-#                ]
-#            else:  # North Indian or common
-#                foods = [
-#                    {"name": "Roti", "calories": int(slot_target * 0.5), "protein": 6, "carbs": 30, "fat": 2, "quantity": "2 medium pieces"},
-#                    {"name": "Dal", "calories": int(slot_target * 0.3), "protein": 8, "carbs": 15, "fat": 4, "quantity": "150 grams"},
-#                    {"name": "Mixed vegetables", "calories": int(slot_target * 0.2), "protein": 3, "carbs": 8, "fat": 2, "quantity": "100 grams"}
-#                ]
-#        elif slot_id == "4":  # Mid-morning
-#            foods = [{"name": "Mixed fruit", "calories": slot_target, "protein": 2, "carbs": 20, "fat": 1, "quantity": "100 grams"}]
-#        elif slot_id == "5":  # Lunch
-#            if cuisine_type == "south_indian":
-#                foods = [
-#                    {"name": "Rice", "calories": int(slot_target * 0.4), "protein": 8, "carbs": 60, "fat": 2, "quantity": "200 grams"},
-#                    {"name": "Sambar", "calories": int(slot_target * 0.25), "protein": 8, "carbs": 20, "fat": 5, "quantity": "200 grams"},
-#                    {"name": "Rasam", "calories": int(slot_target * 0.15), "protein": 3, "carbs": 10, "fat": 3, "quantity": "150 ml"},
-#                    {"name": "Vegetables poriyal", "calories": int(slot_target * 0.2), "protein": 4, "carbs": 12, "fat": 4, "quantity": "100 grams"}
-#                ]
-#            else:
-#                foods = [
-#                    {"name": "Rice", "calories": int(slot_target * 0.35), "protein": 6, "carbs": 50, "fat": 2, "quantity": "150 grams"},
-#                    {"name": "Dal", "calories": int(slot_target * 0.25), "protein": 10, "carbs": 18, "fat": 5, "quantity": "150 grams"},
-#                    {"name": "Mixed vegetables", "calories": int(slot_target * 0.25), "protein": 5, "carbs": 15, "fat": 4, "quantity": "150 grams"},
-#                    {"name": "Curd", "calories": int(slot_target * 0.15), "protein": 5, "carbs": 8, "fat": 3, "quantity": "100 grams"}
-#                ]
-#        elif slot_id == "6":  # Evening
-#            foods = [{"name": "Tea with biscuits", "calories": slot_target, "protein": 3, "carbs": 15, "fat": 4, "quantity": "1 cup + 2 biscuits"}]
-#        elif slot_id == "7":  # Dinner
-#            if cuisine_type == "south_indian":
-#                foods = [
-#                    {"name": "Rice", "calories": int(slot_target * 0.4), "protein": 6, "carbs": 45, "fat": 1, "quantity": "150 grams"},
-#                    {"name": "Rasam", "calories": int(slot_target * 0.3), "protein": 4, "carbs": 12, "fat": 4, "quantity": "200 ml"},
-#                    {"name": "Vegetable curry", "calories": int(slot_target * 0.3), "protein": 5, "carbs": 10, "fat": 5, "quantity": "100 grams"}
-#                ]
-#            else:
-#                foods = [
-#                    {"name": "Roti", "calories": int(slot_target * 0.4), "protein": 8, "carbs": 35, "fat": 3, "quantity": "3 medium pieces"},
-#                    {"name": "Dal", "calories": int(slot_target * 0.35), "protein": 10, "carbs": 20, "fat": 6, "quantity": "150 grams"},
-#                    {"name": "Vegetable curry", "calories": int(slot_target * 0.25), "protein": 4, "carbs": 12, "fat": 4, "quantity": "100 grams"}
-#                ]
-      
-#        fallback_meals.append({
-#            "slot_id": slot_id,
-#            "target_calories": slot_target,
-#            "foods": foods
-#        })
-  
-#    return {
-#        "day_name": day_name,
-#        "total_target_calories": target_calories,
-#        "meals": fallback_meals
-#   }
 def convert_ai_meal_to_template(meal_data):
    """Convert AI generated meal data to template format"""
    template = get_meal_template()
@@ -1152,16 +1025,9 @@ def generate_7_day_meal_plan(profile, diet_type, cuisine_type):
               
        except Exception as e:
            print(f"Error generating meal plan for {day}: {e}")
-           # Use fallback for this day
-           fallback_data = create_fallback_meal_plan(day, diet_type, cuisine_type, profile, previous_meals)
-           template = convert_ai_meal_to_template(fallback_data)
+           # Using get_meal_template() as basic fallback
+           template = get_meal_template()
            meal_plan[day.lower()] = template
-          
-           # Track fallback meals too
-           day_meals = extract_main_meals(fallback_data)
-           previous_meals['breakfasts'].extend(day_meals['breakfasts'])
-           previous_meals['lunches'].extend(day_meals['lunches'])
-           previous_meals['dinners'].extend(day_meals['dinners'])
   
    return meal_plan
 
@@ -1315,7 +1181,6 @@ def detect_diet_preference(text):
     
     print("DEBUG: No diet pattern matched")
     return None
-  
 
 
 def detect_cuisine_preference(text):
@@ -1401,6 +1266,7 @@ def detect_cuisine_preference(text):
   
    print("DEBUG: No cuisine pattern matched")
    return None
+
 
 def get_diet_specific_restrictions(diet_type):
     """Get specific food restrictions and guidelines for each diet type"""
@@ -2006,9 +1872,8 @@ Examples:
                     yield sse_json({
                         "type": "meal_plan_final", 
                         "status": "completed",
-                        "diet_type":diet_type,
+                        "diet_type": pending_state.get("diet_type"),
                         "meal_plan": meal_plan,
-
                         "day_names": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
                     })
                     yield "event: done\ndata: [DONE]\n\n"
@@ -2135,7 +2000,7 @@ Examples:
                     yield sse_json({
                         "type": "meal_plan_final",
                         "status": "completed", 
-                        "diet_type": pending_state.get("diet_type"),  # FIX THIS LINE
+                        "diet_type": pending_state.get("diet_type"),
                         "meal_plan": updated_meal_plan,
                         "day_names": custom_names
                     })
@@ -2197,6 +2062,7 @@ Examples:
                     yield sse_json({
                         "type": "meal_plan_final",
                         "status": "completed",
+                        "diet_type": pending_state.get("diet_type"),
                         "meal_plan": updated_meal_plan,
                         "day_names": custom_names
                     })
@@ -2211,7 +2077,6 @@ Examples:
                 
                 return StreamingResponse(_invalid_selected_names(), media_type="text/event-stream",
                                         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-       #########################################################
 
        # Handle name change after allergy update
        elif pending_state and pending_state.get("state") == "awaiting_name_change_after_allergy":
@@ -2254,18 +2119,18 @@ Examples:
                 meal_plan = pending_state.get("meal_plan")
                 await mem.clear_pending(user_id)
                 
-                async def _finalize_default():
+                async def _finalize_default_after_allergy():
                     yield f"data: {json.dumps({'message': '✅ Your 7-day meal plan is finalized!', 'type': 'finalized'})}\n\n"
                     yield sse_json({
                         "type": "meal_plan_final",
                         "status": "completed",
-                        "diet_type": pending_state.get("diet_type"),  # ADD THIS LINE
+                        "diet_type": pending_state.get("diet_type"),
                         "meal_plan": meal_plan,
                         "day_names": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
                     })
                     yield "event: done\ndata: [DONE]\n\n"
                 
-                return StreamingResponse(_finalize_default(), media_type="text/event-stream",
+                return StreamingResponse(_finalize_default_after_allergy(), media_type="text/event-stream",
                                         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
             
             else:
@@ -2276,71 +2141,49 @@ Examples:
                 return StreamingResponse(_ask_name_change_again_after_allergy(), media_type="text/event-stream",
                                         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
       
-       # Handle custom name input
-       elif pending_state and pending_state.get("state") == "awaiting_custom_names":
-           print("DEBUG: In awaiting_custom_names state")
-          
-           if text.lower() == "cancel":
-               meal_plan = pending_state.get("meal_plan")
-               await mem.clear_pending(user_id)
-              
-               async def _cancel_custom():
-                   yield f"data: {json.dumps({'message': '✅ Your 7-day meal plan is ready with default day names!', 'type': 'finalized'})}\n\n"
-                   yield sse_json({
-                       "type": "meal_plan_final",
-                       "status": "completed",
-                       "meal_plan": meal_plan,
-                       "day_names": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-                   })
-                   yield "event: done\ndata: [DONE]\n\n"
-              
-               return StreamingResponse(_cancel_custom(), media_type="text/event-stream",
-                                       headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-          
-           # Parse custom names
-           custom_names = [name.strip() for name in text.split(",") if name.strip()]
-          
-           if len(custom_names) == 7:
-               # Update meal plan with custom names
-               meal_plan = pending_state.get("meal_plan")
-               default_days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
-              
-               updated_meal_plan = {}
-               for i, custom_name in enumerate(custom_names):
-                   if i < len(default_days):
-                       updated_meal_plan[custom_name.lower().replace(" ", "_")] = meal_plan.get(default_days[i], get_meal_template())
-              
-               await mem.clear_pending(user_id)
-              
-               async def _finalize_custom():
-                   yield f"data: {json.dumps({'message': f'✅ Your 7-day meal plan is ready with custom day names: {', '.join(custom_names)}!', 'type': 'finalized'})}\n\n"
-                   yield sse_json({
-                       "type": "meal_plan_final",
-                       "status": "completed",
-                       "meal_plan": updated_meal_plan,
-                       "day_names": custom_names
-                   })
-                   yield "event: done\ndata: [DONE]\n\n"
-              
-               return StreamingResponse(_finalize_custom(), media_type="text/event-stream",
-                                       headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-           else:
-               async def _ask_names_again():
-                   yield f"data: {json.dumps({'message': f'Please provide exactly 7 day names separated by commas. You provided {len(custom_names)} names. Try again or say \"cancel\" to use default names.', 'type': 'error'})}\n\n"
-                   yield "event: done\ndata: [DONE]\n\n"
-              
-               return StreamingResponse(_ask_names_again(), media_type="text/event-stream",
-                                       headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-      
        # Handle case where no pending state exists but user is sending text
        else:
            print(f"DEBUG: No valid pending state found. Current state: {pending_state}")
-           async def _restart():
-               yield f"data: {json.dumps({'message': 'It seems our conversation got reset. Let me start fresh. Please use the endpoint without text parameter to begin creating your meal plan.', 'type': 'restart'})}\n\n"
-               yield "event: done\ndata: [DONE]\n\n"
-          
-           return StreamingResponse(_restart(), media_type="text/event-stream",
-                                   headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+           
+           # If no pending state exists, treat this as the first interaction and start fresh
+           try:
+               profile = _fetch_profile(db, client_id)
+               print(f"DEBUG: Starting fresh conversation with profile: {profile}")
+              
+               async def _start_fresh():
+                   welcome_msg = f"""Hello! I'm your meal template assistant.
+
+I can see your profile:
+• Current Weight: {profile['current_weight']} kg
+• Target Weight: {profile['target_weight']} kg 
+• Goal: {profile['weight_delta_text']}
+• Daily Calorie Target: {profile['target_calories']} calories
+
+I'll create a personalized 7-day meal template for you. First, are you vegetarian or non-vegetarian or eggetarian or vegan or ketogenic or paleo or jain?
+
+(You said: "{text}")"""
+                  
+                   await mem.set_pending(user_id, {
+                       "state": "awaiting_diet_preference",
+                       "client_id": client_id,
+                       "profile": profile
+                   })
+                  
+                   yield f"data: {json.dumps({'message': welcome_msg, 'type': 'welcome'})}\n\n"
+                   yield "event: done\ndata: [DONE]\n\n"
+              
+               return StreamingResponse(_start_fresh(), media_type="text/event-stream",
+                                       headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+                                      
+           except Exception as e:
+               print(f"Error starting fresh conversation: {e}")
+               print(f"Fresh start traceback: {traceback.format_exc()}")
+               async def _error_start():
+                   yield f"data: {json.dumps({'message': 'Error starting conversation. Please check the client ID and try again.', 'type': 'error'})}\n\n"
+                   yield "event: done\ndata: [DONE]\n\n"
+              
+               return StreamingResponse(_error_start(), media_type="text/event-stream",
+                                       headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
   
    except Exception as e:
        print(f"Critical error in chat_stream: {e}")
@@ -2359,12 +2202,8 @@ Examples:
                                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
-
-
 class UserId(BaseModel):
    user_id: int
-
-
 
 
 @router.get("/debug_pending")
@@ -2380,8 +2219,6 @@ async def debug_pending(
        return {"user_id": user_id, "pending_state": None, "error": str(e), "status": "error"}
 
 
-
-
 @router.post("/clear_pending")
 async def clear_pending_state(
    req: UserId,
@@ -2393,8 +2230,6 @@ async def clear_pending_state(
        return {"status": "cleared", "user_id": req.user_id}
    except Exception as e:
        return {"status": "error", "user_id": req.user_id, "error": str(e)}
-
-
 
 
 @router.post("/delete_chat")
@@ -2412,8 +2247,6 @@ async def delete_chat(
    except Exception as e:
        print(f"Error deleting chat for user {req.user_id}: {e}")
        return {"status": "error", "user_id": req.user_id, "error": str(e)}
-
-
 
 
 @router.get("/test_diet_detection")
@@ -2436,5 +2269,3 @@ async def test_cuisine_detection(text: str):
        "detected_cuisine": result,
        "status": "success" if result else "no_match"
    }
-
-
