@@ -605,7 +605,7 @@ def handle_quantity_question(food_name, unit=None):
     food_info = get_smart_unit_and_question(food_name)
     return food_info['question']
 
-@router.get("/chat/stream_test", dependencies=[Depends(RateLimiter(times=30, seconds=60))])
+@router.get("/chat/stream_test")
 async def chat_stream(
     user_id: int,
     text: str = Query(None),
@@ -797,6 +797,8 @@ async def chat_stream(
                                 
                                 async def _final_log():
                                     response_data = create_food_log_response_with_message(logged_foods)
+                                    
+                                    # Send only the complete food log data (includes the message)
                                     yield sse_json(response_data)
                                     yield "event: ping\ndata: {}\n\n"
                                     yield "event: done\ndata: [DONE]\n\n"
@@ -880,11 +882,7 @@ async def chat_stream(
                         async def _logged_then_nav():
                             response_data = create_food_log_response_with_message(logged_foods)
                             
-                            # First yield the message separately to ensure it's displayed
-                            if 'message' in response_data:
-                                yield f"data: {json.dumps({'message': response_data['message'], 'type': 'response'})}\n\n"
-                            
-                            # Then yield the food log data
+                            # Send only the complete food log data (includes the message)
                             yield sse_json(response_data)
                             yield "event: ping\ndata: {}\n\n"
                             yield "event: done\ndata: [DONE]\n\n"
@@ -995,11 +993,7 @@ async def chat_stream(
             async def _logged_then_nav():
                 response_data = create_food_log_response_with_message(logged_foods)
                 
-                # First yield the message separately to ensure it's displayed
-                if 'message' in response_data:
-                    yield f"data: {json.dumps({'message': response_data['message'], 'type': 'response'})}\n\n"
-                
-                # Then yield the food log data
+                # Send only the complete food log data (includes the message)
                 yield sse_json(response_data)
                 yield "event: ping\ndata: {}\n\n"
                 yield "event: done\ndata: [DONE]\n\n"
