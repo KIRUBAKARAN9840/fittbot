@@ -216,6 +216,7 @@ def get_enhanced_ai_prompt(text):
     CRITICAL FOOD IDENTIFICATION RULES:
     1. COMPOUND FOODS: Treat compound words as SINGLE dishes:
        - "curdrice" = "curd rice" (one dish, not separate curd and rice)
+          note: if curd,rice are separate with space/comma, treat as two dishes
        - "lemonrice" = "lemon rice" (one dish)
        - "masalatea" = "masala tea" (one dish)
     
