@@ -62,6 +62,13 @@ def get_smart_unit_and_question(food_name):
             'alternatives': ['grams', 'plates', 'bowls'],
             'question_template': "How many {food} did you have? (pieces, plates, or grams)"
         },
+        # ADD THIS NEW CATEGORY for rice dishes
+        'rice_dishes': {
+            'foods': ['biryani', 'biriyani', 'briyani', 'pulao', 'pilaf', 'fried rice', 'jeera rice', 'lemon rice', 'pongal'],
+            'primary_unit': 'plates',  # Changed from pieces to plates
+            'alternatives': ['bowls', 'grams', 'pieces'],
+            'question_template': "How many plates of {food} did you have? (plates, bowls, or grams)"
+        },
         'liquids': {
             'foods': ['juice', 'milk', 'water', 'tea', 'coffee', 'drink', 'smoothie', 'shake', 'lassi'],
             'primary_unit': 'ml',
@@ -106,7 +113,7 @@ def get_smart_unit_and_question(food_name):
         }
     }
     
-    # Find matching category
+    # Find matching category (check rice_dishes first for biryani)
     for category, data in food_categories.items():
         if any(food_item in food_lower for food_item in data['foods']):
             return {
@@ -125,13 +132,13 @@ def get_smart_unit_and_question(food_name):
     }
 
 def normalize_unit_with_context(unit, food_name):
-    """Enhanced unit normalization that considers food context"""
+    """Simplified unit normalization - trust AI decisions more"""
     if not unit:
-        return get_smart_unit_and_question(food_name)['primary_unit']
+        return 'pieces'  # Simple fallback
     
     unit_lower = unit.lower().strip()
     
-    # Standard unit mappings
+    # Standard unit mappings - expanded for spoons
     unit_map = {
         'g': 'grams', 'gram': 'grams', 'gms': 'grams',
         'kg': 'kg', 'kilogram': 'kg', 'kilograms': 'kg',
@@ -143,20 +150,25 @@ def normalize_unit_with_context(unit, food_name):
         'liter': 'liters', 'litre': 'liters', 'l': 'liters',
         'can': 'cans', 'tin': 'cans', 'packet': 'packets',
         'tablespoon': 'tablespoons', 'tbsp': 'tablespoons',
-        'teaspoon': 'teaspoons', 'tsp': 'teaspoons'
+        'teaspoon': 'teaspoons', 'tsp': 'teaspoons',
+        'spoon': 'tablespoons', 'spoons': 'tablespoons'  # Added spoon mapping
     }
     
     normalized = unit_map.get(unit_lower, unit_lower)
     
-    # Validate unit makes sense for food type
-    food_info = get_smart_unit_and_question(food_name)
-    valid_units = [food_info['primary_unit']] + food_info['alternatives']
+    # Accept any reasonable unit without overriding
+    common_food_units = [
+        'pieces', 'plates', 'bowls', 'cups', 'glasses', 'grams', 'ml', 'slices', 
+        'tablespoons', 'teaspoons', 'kg', 'liters', 'cans', 'packets'
+    ]
     
-    if normalized not in valid_units:
-        print(f"DEBUG: Unit '{normalized}' not typical for {food_name}, using primary unit '{food_info['primary_unit']}'")
-        return food_info['primary_unit']
-    
-    return normalized
+    if normalized in common_food_units:
+        print(f"DEBUG: Using unit '{normalized}' for {food_name}")
+        return normalized
+    else:
+        print(f"DEBUG: Unknown unit '{unit}', defaulting to pieces")
+        return 'pieces'
+
 
 def normalize_unit(unit):
     """Legacy function - kept for backward compatibility"""
@@ -197,58 +209,59 @@ def convert_food_to_item_format(food):
     }
 
 def get_enhanced_ai_prompt(text):
-    """Generate enhanced AI prompt with better unit logic"""
+    """Generate comprehensive AI prompt that handles all edge cases"""
     return f"""
     Analyze this text and extract food information: "{text}"
 
-    FOOD IDENTIFICATION:
-    - Extract ALL foods, beverages, drinks, snacks mentioned
-    - Handle misspellings (dosa, avacado→avocado, sugarcanjuice→sugar cane juice)
-    - Be very permissive - include anything that could be food
-
-    SMART UNIT ASSIGNMENT (when quantity provided):
-    For each food, choose the MOST NATURAL unit:
+    CRITICAL FOOD IDENTIFICATION RULES:
+    1. COMPOUND FOODS: Treat compound words as SINGLE dishes:
+       - "curdrice" = "curd rice" (one dish, not separate curd and rice)
+       - "lemonrice" = "lemon rice" (one dish)
+       - "masalatea" = "masala tea" (one dish)
     
-    INDIAN FOODS:
-    - dosa, idli, uttapam, vada → pieces (not plates!)
-    - rice, curry, dal, sambar → plates or bowls
-    - roti, chapati, naan → pieces
+    2. FOOD DETECTION: Extract ALL foods/drinks, handle misspellings liberally
+    3. CONTEXT AWARENESS: Consider Indian cuisine context for units and dishes
+
+    INTELLIGENT UNIT ASSIGNMENT:
+    When quantity is provided, choose the MOST LOGICAL unit based on:
     
-    GENERAL FOODS:
-    - Fruits (apple, banana, mango) → pieces
-    - Vegetables (potato, tomato) → pieces or grams
-    - Liquids (juice, milk, water) → ml or cups or glasses
-    - Meat/Protein (chicken, fish, egg) → pieces or grams
-    - Snacks (biscuits, chips) → pieces or grams
-    - Bread items → slices or pieces
+    INDIAN RICE DISHES (use plates/bowls):
+    - Any rice dish: biryani, pulao, fried rice, lemon rice, curd rice → plates
+    - Curries, dal, sambar → bowls
+    
+    MEASUREMENT CONTEXT:
+    - "spoon", "spoons" → tablespoons (NOT grams)
+    - Small countable items → pieces  
+    - Liquids → ml, cups, glasses
+    - Large servings → plates, bowls
+    - Precise measurements → grams, kg
+    
+    QUANTITY INTERPRETATION:
+    - If user provides quantity, extract it exactly
+    - If no quantity, set to null
+    - Choose unit that matches natural serving size
 
-    QUANTITY RULES:
-    - If user provided specific quantity, use it exactly
-    - If no quantity provided, set quantity to null
-    - Choose unit that matches how people normally measure that food
+    EXAMPLES OF CORRECT INTERPRETATION:
+    - "curdrice" → {{"name": "curd rice", "quantity": null, "unit": "plates"}}
+    - "3 spoon curd" → {{"name": "curd", "quantity": 3, "unit": "tablespoons"}}
+    - "lemonrice" → {{"name": "lemon rice", "quantity": null, "unit": "plates"}}
+    - "2 dosa" → {{"name": "dosa", "quantity": 2, "unit": "pieces"}}
+    - "chicken curry" → {{"name": "chicken curry", "quantity": null, "unit": "bowls"}}
 
-    SMART UNIT LOGIC (when only number provided without unit):
-    - Consider cultural context: Indians often count dosas as pieces, not plates
-    - For liquids: small numbers (≤5) = cups/glasses, large numbers = ml
-    - For countable items: pieces first, then grams as alternative
-    - For rice/curries: plates/bowls for small numbers, grams for large
+    NUTRITION CALCULATION (when quantity provided):
+    - Use REALISTIC conversions:
+      * 1 plate = 300g for rice dishes
+      * 1 tablespoon = 15g for dense foods, 15ml for liquids
+      * 1 piece = varies by food (dosa=80g, chicken piece=100g)
+    - Calculate accurate nutrition for exact quantity
+    - If quantity is null, omit nutrition fields
 
-    NUTRITION CALCULATION (when quantity is provided):
-    - Use these FIXED conversions for calculations:
-      * 1 plate = 300 grams
-      * 1 cup = 200 ml (for liquids) or 200 grams (for solids)
-      * 1 bowl = 200 grams
-      * 1 glass = 200 ml
-    - Calculate nutrition values for the EXACT quantity specified using these conversions
-    - If quantity is null, don't include nutrition values
-    - Provide: calories, protein, carbs, fat, fiber, sugar
-
-    Return valid JSON array with natural units:
+    Return ONLY valid JSON array:
     [
         {{
-            "name": "normalized_food_name",
+            "name": "properly_formatted_food_name",
             "quantity": number_or_null,
-            "unit": "most_natural_unit",
+            "unit": "contextually_appropriate_unit",
             "calories": number_or_null,
             "protein": number_or_null,
             "carbs": number_or_null,
@@ -257,17 +270,12 @@ def get_enhanced_ai_prompt(text):
             "sugar": number_or_null
         }}
     ]
-
-    EXAMPLES:
-    "dosa" → {{"name": "dosa", "quantity": null, "unit": "pieces"}}
-    "2 dosa" → {{"name": "dosa", "quantity": 2, "unit": "pieces", "calories": 300, ...}}
-    "rice" → {{"name": "rice", "quantity": null, "unit": "plates"}}
-    "chicken" → {{"name": "chicken", "quantity": null, "unit": "pieces"}}
-    "orange juice" → {{"name": "orange juice", "quantity": null, "unit": "ml"}}
+    
+    CRITICAL: Use cultural context for Indian foods. Don't split compound food words.
     """
 
 def extract_food_info_using_ai(text: str):
-    """AI-driven food extraction with OpenAI primary and Gemini fallback"""
+    """AI-driven food extraction with comprehensive prompt"""
     
     reasoning_prompt = get_enhanced_ai_prompt(text)
 
@@ -278,7 +286,12 @@ def extract_food_info_using_ai(text: str):
             messages=[
                 {
                     "role": "system", 
-                    "content": "You are a nutrition expert. Use the FIXED conversions provided (1 plate = 300g, 1 cup = 200ml/g) for accurate calculations. Always assign culturally appropriate units."
+                    "content": """You are a nutrition expert specializing in Indian cuisine. 
+                    CRITICAL RULES:
+                    1. Compound food words are SINGLE dishes (curdrice = curd rice as one dish)
+                    2. Use culturally appropriate units (plates for rice dishes, tablespoons for spoons)
+                    3. Never split single dishes into multiple foods
+                    4. Respect user's measurement context (3 spoon = 3 tablespoons, not grams)"""
                 },
                 {"role": "user", "content": reasoning_prompt}
             ],
@@ -294,12 +307,7 @@ def extract_food_info_using_ai(text: str):
         if not isinstance(foods, list):
             foods = [foods] if isinstance(foods, dict) else []
         
-        # Normalize units with context
-        for food in foods:
-            if food.get('unit') and food.get('name'):
-                food['unit'] = normalize_unit_with_context(food['unit'], food['name'])
-        
-        print(f"DEBUG: OpenAI extracted: {[(f.get('name'), f.get('quantity'), f.get('unit')) for f in foods]}")
+        print(f"DEBUG: AI extracted foods: {[(f.get('name'), f.get('quantity'), f.get('unit')) for f in foods]}")
         return {"foods": foods}
 
     except Exception as e:
@@ -318,12 +326,7 @@ def extract_food_info_using_ai(text: str):
                 if not isinstance(foods, list):
                     foods = [foods] if isinstance(foods, dict) else []
                 
-                # Normalize units with context
-                for food in foods:
-                    if food.get('unit') and food.get('name'):
-                        food['unit'] = normalize_unit_with_context(food['unit'], food['name'])
-                
-                print(f"DEBUG: Gemini extracted: {[(f.get('name'), f.get('quantity'), f.get('unit')) for f in foods]}")
+                print(f"DEBUG: Gemini extracted foods: {[(f.get('name'), f.get('quantity'), f.get('unit')) for f in foods]}")
                 return {"foods": foods}
                 
         except Exception as gemini_error:
@@ -332,6 +335,7 @@ def extract_food_info_using_ai(text: str):
         # Simple fallback parsing
         print("Both AI models failed, using fallback parsing...")
         return parse_food_with_smart_units(text)
+
 
 def parse_food_with_smart_units(text):
     """Enhanced fallback parsing with smart unit assignment"""
@@ -387,33 +391,39 @@ def parse_food_with_smart_units(text):
     return {"foods": foods}
 
 def calculate_nutrition_using_ai(food_name, quantity, unit):
-    """Use AI to calculate nutrition for specific quantity with fixed conversions"""
+    """Enhanced nutrition calculation with better unit handling"""
     try:
         prompt = f"""
         Calculate nutrition for: {quantity} {unit} of {food_name}
         
-        Use these FIXED conversions:
-        - 1 plate = 300 grams
-        - 1 cup = 200 ml (for liquids) or 200 grams (for solids)
+        Use these REALISTIC conversions:
+        - 1 plate (rice dishes) = 300 grams
+        - 1 tablespoon = 15 grams (solids) or 15 ml (liquids)
+        - 1 teaspoon = 5 grams (solids) or 5 ml (liquids)
+        - 1 cup = 200 grams (solids) or 200 ml (liquids)
         - 1 bowl = 200 grams
         - 1 glass = 200 ml
+        - 1 piece varies by food type (estimate appropriately)
         
-        First convert to base units (grams or ml), then calculate nutrition.
+        For spoon measurements, consider the food density:
+        - Curd/yogurt: 1 tablespoon ≈ 15g
+        - Ghee/oil: 1 tablespoon ≈ 14g
+        - Rice: 1 tablespoon ≈ 12g
         
-        Example: "2 pieces of chicken" = assume 100g per piece = 200g total
-        Example: "2 cups orange juice" = 2 × 200ml = 400ml total
+        Examples:
+        - "3 tablespoons of curd" = 45g of curd
+        - "1 plate of lemon rice" = 300g of lemon rice
+        - "2 pieces of dosa" = 160g total (80g each)
         
-        Return ONLY valid JSON:
+        Return ONLY valid JSON with realistic values:
         {{
-            "calories": 165,
-            "protein": 31,
-            "carbs": 0,
-            "fat": 3.6,
-            "fiber": 0,
-            "sugar": 0
+            "calories": number,
+            "protein": number,
+            "carbs": number,
+            "fat": number,
+            "fiber": number,
+            "sugar": number
         }}
-        
-        Provide realistic nutrition values, not zeros.
         """
         
         print(f"DEBUG: Calculating nutrition for {quantity} {unit} of {food_name}")
@@ -423,7 +433,10 @@ def calculate_nutrition_using_ai(food_name, quantity, unit):
             response = openai_client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
-                    {"role": "system", "content": "You are a nutrition expert. Always return realistic nutrition values, never all zeros. Use the fixed conversions provided."},
+                    {
+                        "role": "system", 
+                        "content": "You are a nutrition expert. Always provide realistic nutrition values based on the specified quantity and unit. Use the conversions provided."
+                    },
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=300,
@@ -439,11 +452,6 @@ def calculate_nutrition_using_ai(food_name, quantity, unit):
             nutrition = json.loads(result)
             print(f"DEBUG: Parsed nutrition: {nutrition}")
             
-            # Validate nutrition values - ensure they're not all zeros
-            if all(v == 0 for v in nutrition.values()):
-                print("DEBUG: OpenAI returned all zeros, trying fallback")
-                raise Exception("All nutrition values are zero")
-            
             return nutrition
             
         except Exception as openai_error:
@@ -453,65 +461,61 @@ def calculate_nutrition_using_ai(food_name, quantity, unit):
             response = gemini_model.generate_content(prompt)
             if response.text:
                 result = response.text.strip()
-                print(f"DEBUG: Gemini nutrition response: {result}")
-                
                 result = re.sub(r"^```json\s*", "", result)
                 result = re.sub(r"\s*```$", "", result)
                 
                 nutrition = json.loads(result)
-                print(f"DEBUG: Parsed Gemini nutrition: {nutrition}")
-                
-                # Validate nutrition values
-                if all(v == 0 for v in nutrition.values()):
-                    print("DEBUG: Gemini also returned all zeros, using fallback values")
-                    raise Exception("All nutrition values are zero")
-                
                 return nutrition
     
     except Exception as e:
         print(f"AI nutrition calculation failed: {e}, using fallback values")
-        
-        # Return realistic fallback values based on food type
         return get_fallback_nutrition(food_name, quantity, unit)
 
 def get_fallback_nutrition(food_name, quantity, unit):
-    """Provide realistic fallback nutrition values when AI fails"""
+    """Enhanced fallback with better unit conversion"""
     food_lower = food_name.lower()
     
     # Convert to approximate grams for calculation
     if unit == 'plates':
         grams = quantity * 300
+    elif unit == 'bowls':
+        grams = quantity * 200
     elif unit == 'cups':
-        grams = quantity * 200  # Assume 200g/ml per cup
-    elif unit == 'pieces':
-        if 'chicken' in food_lower:
-            grams = quantity * 100  # 100g per piece of chicken
-        elif 'dosa' in food_lower:
-            grams = quantity * 80   # 80g per dosa
-        elif 'pizza' in food_lower:
-            grams = quantity * 50   # 50g per slice of pizza
+        grams = quantity * 200
+    elif unit == 'tablespoons':
+        if 'oil' in food_lower or 'ghee' in food_lower:
+            grams = quantity * 14  # Fat is denser
+        elif 'curd' in food_lower or 'yogurt' in food_lower:
+            grams = quantity * 15
         else:
-            grams = quantity * 80   # Default piece weight
+            grams = quantity * 12  # Rice, etc.
+    elif unit == 'teaspoons':
+        grams = quantity * 5
+    elif unit == 'pieces':
+        if 'dosa' in food_lower:
+            grams = quantity * 80
+        elif 'chicken' in food_lower:
+            grams = quantity * 100
+        else:
+            grams = quantity * 50
     elif unit == 'grams':
         grams = quantity
     elif unit == 'ml':
-        grams = quantity  # For liquids, use ml as grams for calculation
+        grams = quantity  # For liquids
     else:
-        grams = quantity * 80  # Default
+        grams = quantity * 50  # Default
     
-    # Basic nutrition per 100g
-    if 'dosa' in food_lower:
-        per_100g = {"calories": 168, "protein": 4, "carbs": 28, "fat": 4.5, "fiber": 1.5, "sugar": 2}
-    elif 'chicken' in food_lower:
-        per_100g = {"calories": 165, "protein": 31, "carbs": 0, "fat": 3.6, "fiber": 0, "sugar": 0}
-    elif 'pizza' in food_lower:
-        per_100g = {"calories": 266, "protein": 11, "carbs": 33, "fat": 10, "fiber": 2, "sugar": 4}
-    elif 'juice' in food_lower:
-        per_100g = {"calories": 45, "protein": 0.7, "carbs": 10, "fat": 0.2, "fiber": 0.2, "sugar": 8}
+    # Basic nutrition per 100g with better estimates
+    if 'curd' in food_lower and 'rice' in food_lower:
+        per_100g = {"calories": 110, "protein": 3, "carbs": 20, "fat": 2, "fiber": 1, "sugar": 3}
+    elif 'lemon rice' in food_lower:
+        per_100g = {"calories": 150, "protein": 3, "carbs": 28, "fat": 4, "fiber": 1, "sugar": 1}
+    elif 'curd' in food_lower:
+        per_100g = {"calories": 60, "protein": 3.5, "carbs": 4.5, "fat": 3.5, "fiber": 0, "sugar": 4.5}
     elif 'rice' in food_lower:
         per_100g = {"calories": 130, "protein": 2.7, "carbs": 28, "fat": 0.3, "fiber": 0.4, "sugar": 0.1}
     else:
-        per_100g = {"calories": 50, "protein": 2, "carbs": 10, "fat": 1, "fiber": 1, "sugar": 2}
+        per_100g = {"calories": 100, "protein": 3, "carbs": 15, "fat": 2, "fiber": 1, "sugar": 2}
     
     # Calculate for actual portion
     ratio = grams / 100.0
@@ -601,9 +605,44 @@ def create_food_log_response_with_message(logged_foods):
     }
 
 def handle_quantity_question(food_name, unit=None):
-    """Generate appropriate quantity question based on food context"""
-    food_info = get_smart_unit_and_question(food_name)
-    return food_info['question']
+    """Generate AI-driven quantity question"""
+    try:
+        prompt = f"""
+        Generate a natural quantity question for "{food_name}".
+        
+        Consider the most common way this food is measured:
+        - Rice dishes (biryani, fried rice, lemon rice): plates, bowls
+        - Small items (dosa, roti): pieces
+        - Liquids: glasses, cups, ml
+        - Condiments, curd: spoons, tablespoons
+        - Vegetables: pieces, grams
+        
+        Return a friendly question like:
+        "How many plates of biryani did you have?"
+        "How many pieces of dosa?"
+        "How many tablespoons of curd?"
+        
+        Return ONLY the question text, nothing else.
+        """
+        
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "Generate natural food quantity questions based on cultural context."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=50,
+            temperature=0.3
+        )
+        
+        question = response.choices[0].message.content.strip().strip('"')
+        print(f"DEBUG: AI generated question: {question}")
+        return question
+        
+    except Exception as e:
+        print(f"AI question generation failed: {e}")
+        return f"How much {food_name} did you have?"
+
 
 @router.get("/chat/stream_test")
 async def chat_stream(
@@ -828,12 +867,12 @@ async def chat_stream(
                 
                 # Process as quantity input
                 print(f"DEBUG: Processing '{text}' as quantity for {current_food['name']}")
-                quantity_value, parsed_unit = parse_quantity_and_unit(text, current_food['name'])
+                quantity_value, parsed_unit = parse_quantity_and_unit(text, current_food['name'], current_food.get('unit'))
                 
                 if quantity_value is not None:
                     print(f"DEBUG: Parsed quantity: {quantity_value} {parsed_unit}")
                     # Use parsed unit or default to food's preferred unit
-                    final_unit = parsed_unit if parsed_unit else current_food.get("unit", "pieces")
+                    final_unit = parsed_unit
                     
                     # Update food
                     foods[current_index]["quantity"] = quantity_value
@@ -1035,43 +1074,110 @@ def is_quantity_input(text):
     
     return any(re.match(pattern, text_lower) for pattern in quantity_patterns)
     
-def parse_quantity_and_unit(text, food_name):
-    """Enhanced quantity and unit parsing with smart unit interpretation"""
+def parse_quantity_and_unit(text, food_name, existing_unit=None):
+    """Smart parsing that handles large numbers and auto-converts to appropriate units"""
     text_lower = text.lower().strip()
     
-    # Pattern matching for different input formats
-    patterns = [
-        r'(\d+(?:\.\d+)?)\s*(g|grams?|kg|kilograms?)',  # Weight units
-        r'(\d+(?:\.\d+)?)\s*(plates?|bowls?)',          # Serving units
-        r'(\d+(?:\.\d+)?)\s*(pieces?|pcs?|pc)',         # Count units
-        r'(\d+(?:\.\d+)?)\s*(ml|milliliters?|glasses?|cups?)', # Volume units
-        r'(\d+(?:\.\d+)?)\s*(slices?|slc)',             # Slice units
-        r'(\d+(?:\.\d+)?)',                             # Just number
+    # Pattern matching - check if user specified a unit explicitly
+    patterns_with_units = [
+        r'(\d+(?:\.\d+)?)\s*(spoons?|tablespoons?|tbsp|teaspoons?|tsp)',
+        r'(\d+(?:\.\d+)?)\s*(g|grams?|kg|kilograms?)',
+        r'(\d+(?:\.\d+)?)\s*(plates?|bowls?)',
+        r'(\d+(?:\.\d+)?)\s*(pieces?|pcs?|pc)',
+        r'(\d+(?:\.\d+)?)\s*(ml|milliliters?|glasses?|cups?)',
+        r'(\d+(?:\.\d+)?)\s*(slices?|slc)',
     ]
     
-    for pattern in patterns:
+    # Check if user explicitly provided a unit
+    user_provided_unit = False
+    for pattern in patterns_with_units:
         match = re.search(pattern, text_lower)
         if match:
             quantity = float(match.group(1))
-            unit = match.group(2) if len(match.groups()) > 1 else None
+            unit = match.group(2)
+            user_provided_unit = True
             
             # Handle unit conversion
-            if unit:
-                if unit in ['kg', 'kilogram', 'kilograms']:
-                    quantity = quantity * 1000
-                    unit = 'grams'
-                else:
-                    unit = normalize_unit_with_context(unit, food_name)
+            if unit in ['kg', 'kilogram', 'kilograms']:
+                quantity = quantity * 1000
+                unit = 'grams'
             else:
-                # Smart unit interpretation when no unit is provided
-                food_info = get_smart_unit_and_question(food_name)
-                unit = food_info['primary_unit']
+                unit = normalize_unit_with_context(unit, food_name)
             
-            print(f"DEBUG: Parsed '{text}' as {quantity} {unit} for {food_name}")
+            print(f"DEBUG: User provided unit - parsed '{text}' as {quantity} {unit} for {food_name}")
             return quantity, unit
+    
+    # Check for just numbers (no unit provided by user)
+    number_match = re.search(r'(\d+(?:\.\d+)?)', text_lower)
+    if number_match:
+        quantity = float(number_match.group(1))
         
+        if not user_provided_unit:
+            # User didn't provide a unit - apply smart logic
+            
+            # If quantity is large (>10), convert to weight/volume units
+            if quantity > 10:
+                # Determine if food is liquid or solid
+                if is_liquid_food(food_name):
+                    # For liquids, convert large numbers to ml
+                    final_unit = 'ml'
+                    # Cap at reasonable maximum (e.g., 1000ml = 1 liter)
+                    final_quantity = min(quantity, 1000)
+                else:
+                    # For solid foods, convert large numbers to grams  
+                    final_unit = 'grams'
+                    # Cap at reasonable maximum (e.g., 500g for most foods)
+                    final_quantity = min(quantity, 500)
+                
+                print(f"DEBUG: Large number detected - converted {quantity} to {final_quantity} {final_unit} for {food_name}")
+                return final_quantity, final_unit
+            
+            else:
+                # Small number (<=10), use the food's existing unit
+                final_unit = existing_unit if existing_unit else 'pieces'
+                print(f"DEBUG: Small number - using existing unit: {quantity} {final_unit} for {food_name}")
+                return quantity, final_unit
+    
     print(f"DEBUG: Could not parse quantity from '{text}'")
     return None, None
+
+def is_liquid_food(food_name):
+    """Determine if a food is primarily liquid"""
+    food_lower = food_name.lower()
+    liquid_keywords = [
+        'juice', 'milk', 'water', 'tea', 'coffee', 'drink', 'smoothie', 
+        'shake', 'lassi', 'soup', 'broth', 'wine', 'beer', 'soda'
+    ]
+    return any(keyword in food_lower for keyword in liquid_keywords)
+
+def get_food_max_reasonable_serving(food_name, unit):
+    """Get maximum reasonable serving size for different foods"""
+    food_lower = food_name.lower()
+    
+    # Define reasonable maximums by food type and unit
+    max_servings = {
+        # Rice dishes
+        'rice': {'plates': 3, 'bowls': 4, 'grams': 400},
+        'biryani': {'plates': 2, 'bowls': 3, 'grams': 600},
+        'pongal': {'plates': 2, 'bowls': 3, 'grams': 400},
+        
+        # Liquids
+        'juice': {'ml': 500, 'glasses': 3, 'cups': 3},
+        'milk': {'ml': 500, 'glasses': 3, 'cups': 3},
+        'water': {'ml': 1000, 'glasses': 5, 'cups': 5},
+        
+        # Default maximums by unit
+        'default': {'plates': 3, 'bowls': 4, 'pieces': 10, 'grams': 500, 'ml': 1000}
+    }
+    
+    # Check specific food first
+    for food_key in max_servings:
+        if food_key in food_lower and food_key != 'default':
+            return max_servings[food_key].get(unit, max_servings['default'].get(unit, 10))
+    
+    # Use default
+    return max_servings['default'].get(unit, 10)
+
 
 
 class Userid(BaseModel):
