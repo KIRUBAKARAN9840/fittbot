@@ -622,9 +622,9 @@ Create UNIQUE daily variations - each day should have different main meals even 
                 
         except Exception as e:
             print(f"Error regenerating {day}: {e}")
-            # Note: create_fallback_meal_plan function has been removed
-            # Using get_meal_template() as basic fallback
-            day_template = get_meal_template()
+            # Use fallback for this day
+            fallback_data = create_fallback_meal_plan(day, diet_type, cuisine_type, profile, previous_meals)
+            day_template = convert_ai_meal_to_template(fallback_data)
             new_meal_plan[day.lower()] = day_template
     
     print(f"DEBUG: Successfully regenerated {len(new_meal_plan)} unique daily plans")
@@ -678,6 +678,69 @@ def validate_and_adjust_calories(meal_data, target_calories, max_attempts=3):
   
    current_calories = calculate_total_calories(meal_data)
    tolerance = target_calories * 0.13 # Allow 15% tolerance
+  
+   print(f"DEBUG: Current calories: {current_calories}, Target: {target_calories}")
+  
+   if abs(current_calories - target_calories) <= tolerance:
+       print(f"DEBUG: Calories within tolerance")
+       return meal_data
+  
+   # Calculate adjustment factor
+   if current_calories > 0:
+       scale_factor = target_calories / current_calories
+       print(f"DEBUG: Scaling meals by factor: {scale_factor:.2f}")
+       return scale_meal_calories(meal_data, scale_factor)
+  
+   return meal_data
+
+
+def calculate_meal_calories_distribution(target_calories):
+   """Calculate calorie distribution across meal slots"""
+   distributions = {
+       "1": 0.02,  # Early Morning Detox - 2%
+       "2": 0.05,  # Pre-Breakfast Starter - 5%
+       "3": 0.25,  # Breakfast - 25%
+       "4": 0.10,  # Mid-Morning Snack - 10%
+       "5": 0.35,  # Lunch - 35%
+       "6": 0.10,  # Evening Snack - 10%
+       "7": 0.25   # Dinner - 25%
+   }
+  
+   # Allow ±10% flexibility per slot
+   slot_calories = {}
+   for slot_id, percentage in distributions.items():
+       base_calories = target_calories * percentage
+       slot_calories[slot_id] = {
+           "target": round(base_calories),
+           "min": round(base_calories * 0.9),
+           "max": round(base_calories * 1.1)
+       }
+  
+   return slot_calories
+
+
+def validate_and_adjust_calories(meal_data, target_calories, max_attempts=3):
+   """Validate total calories and adjust if needed"""
+  
+   def calculate_total_calories(meal_data):
+       total = 0
+       for meal_slot in meal_data.get("meals", []):
+           for food in meal_slot.get("foods", []):
+               total += food.get("calories", 0)
+       return total
+  
+   def scale_meal_calories(meal_data, scale_factor):
+       """Scale all calories in the meal plan by a factor"""
+       for meal_slot in meal_data.get("meals", []):
+           for food in meal_slot.get("foods", []):
+               food["calories"] = round(food["calories"] * scale_factor)
+               food["protein"] = round(food["protein"] * scale_factor, 1)
+               food["carbs"] = round(food["carbs"] * scale_factor, 1)
+               food["fat"] = round(food["fat"] * scale_factor, 1)
+       return meal_data
+  
+   current_calories = calculate_total_calories(meal_data)
+   tolerance = target_calories * 0.15  # Allow 15% tolerance
   
    print(f"DEBUG: Current calories: {current_calories}, Target: {target_calories}")
   
@@ -901,15 +964,7 @@ Return ONLY valid JSON - no markdown formatting or extra text."""
         print(f"AI meal generation error for {day_name}: {e}")
         print(f"AI generation traceback: {traceback.format_exc()}")
         print(f"DEBUG: Falling back to default meal plan for {day_name}")
-        # Using get_meal_template() as basic fallback
-        return {
-            "day_name": day_name,
-            "total_target_calories": target_calories,
-            "meals": [
-                {"slot_id": str(i+1), "target_calories": 0, "foods": []}
-                for i in range(7)
-            ]
-        }
+        return create_fallback_meal_plan(day_name, diet_type, cuisine_type, profile, previous_meals)
 
 
 def get_curry_suggestions(diet_type, cuisine):
@@ -938,6 +993,78 @@ def get_slot_name(slot_id):
    return slot_names.get(slot_id, f"Slot {slot_id}")
 
 
+def create_fallback_meal_plan(day_name, diet_type, cuisine_type, profile, previous_meals=None):
+   """Create a fallback meal plan with accurate calories"""
+   target_calories = profile['target_calories']
+   slot_calories = calculate_meal_calories_distribution(target_calories)
+  
+   # Create basic fallback based on cuisine and diet type
+   fallback_meals = []
+  
+   for slot_id in ["1", "2", "3", "4", "5", "6", "7"]:
+       slot_target = slot_calories[slot_id]["target"]
+      
+       if slot_id == "1":  # Early Morning
+           foods = [{"name": "Warm lemon water", "calories": slot_target, "protein": 0, "carbs": 2, "fat": 0, "quantity": "250 ml"}]
+       elif slot_id == "2":  # Pre-breakfast
+           foods = [{"name": "Soaked almonds", "calories": slot_target, "protein": 3, "carbs": 2, "fat": 5, "quantity": "5 pieces"}]
+       elif slot_id == "3":  # Breakfast
+           if cuisine_type == "south_indian":
+               foods = [
+                   {"name": "Idli", "calories": int(slot_target * 0.6), "protein": 8, "carbs": 40, "fat": 2, "quantity": "4 pieces"},
+                   {"name": "Sambar", "calories": int(slot_target * 0.3), "protein": 5, "carbs": 15, "fat": 3, "quantity": "150 ml"},
+                   {"name": "Coconut chutney", "calories": int(slot_target * 0.1), "protein": 1, "carbs": 3, "fat": 2, "quantity": "20 grams"}
+               ]
+           else:  # North Indian or common
+               foods = [
+                   {"name": "Roti", "calories": int(slot_target * 0.5), "protein": 6, "carbs": 30, "fat": 2, "quantity": "2 medium pieces"},
+                   {"name": "Dal", "calories": int(slot_target * 0.3), "protein": 8, "carbs": 15, "fat": 4, "quantity": "150 grams"},
+                   {"name": "Mixed vegetables", "calories": int(slot_target * 0.2), "protein": 3, "carbs": 8, "fat": 2, "quantity": "100 grams"}
+               ]
+       elif slot_id == "4":  # Mid-morning
+           foods = [{"name": "Mixed fruit", "calories": slot_target, "protein": 2, "carbs": 20, "fat": 1, "quantity": "100 grams"}]
+       elif slot_id == "5":  # Lunch
+           if cuisine_type == "south_indian":
+               foods = [
+                   {"name": "Rice", "calories": int(slot_target * 0.4), "protein": 8, "carbs": 60, "fat": 2, "quantity": "200 grams"},
+                   {"name": "Sambar", "calories": int(slot_target * 0.25), "protein": 8, "carbs": 20, "fat": 5, "quantity": "200 grams"},
+                   {"name": "Rasam", "calories": int(slot_target * 0.15), "protein": 3, "carbs": 10, "fat": 3, "quantity": "150 ml"},
+                   {"name": "Vegetables poriyal", "calories": int(slot_target * 0.2), "protein": 4, "carbs": 12, "fat": 4, "quantity": "100 grams"}
+               ]
+           else:
+               foods = [
+                   {"name": "Rice", "calories": int(slot_target * 0.35), "protein": 6, "carbs": 50, "fat": 2, "quantity": "150 grams"},
+                   {"name": "Dal", "calories": int(slot_target * 0.25), "protein": 10, "carbs": 18, "fat": 5, "quantity": "150 grams"},
+                   {"name": "Mixed vegetables", "calories": int(slot_target * 0.25), "protein": 5, "carbs": 15, "fat": 4, "quantity": "150 grams"},
+                   {"name": "Curd", "calories": int(slot_target * 0.15), "protein": 5, "carbs": 8, "fat": 3, "quantity": "100 grams"}
+               ]
+       elif slot_id == "6":  # Evening
+           foods = [{"name": "Tea with biscuits", "calories": slot_target, "protein": 3, "carbs": 15, "fat": 4, "quantity": "1 cup + 2 biscuits"}]
+       elif slot_id == "7":  # Dinner
+           if cuisine_type == "south_indian":
+               foods = [
+                   {"name": "Rice", "calories": int(slot_target * 0.4), "protein": 6, "carbs": 45, "fat": 1, "quantity": "150 grams"},
+                   {"name": "Rasam", "calories": int(slot_target * 0.3), "protein": 4, "carbs": 12, "fat": 4, "quantity": "200 ml"},
+                   {"name": "Vegetable curry", "calories": int(slot_target * 0.3), "protein": 5, "carbs": 10, "fat": 5, "quantity": "100 grams"}
+               ]
+           else:
+               foods = [
+                   {"name": "Roti", "calories": int(slot_target * 0.4), "protein": 8, "carbs": 35, "fat": 3, "quantity": "3 medium pieces"},
+                   {"name": "Dal", "calories": int(slot_target * 0.35), "protein": 10, "carbs": 20, "fat": 6, "quantity": "150 grams"},
+                   {"name": "Vegetable curry", "calories": int(slot_target * 0.25), "protein": 4, "carbs": 12, "fat": 4, "quantity": "100 grams"}
+               ]
+      
+       fallback_meals.append({
+           "slot_id": slot_id,
+           "target_calories": slot_target,
+           "foods": foods
+       })
+  
+   return {
+       "day_name": day_name,
+       "total_target_calories": target_calories,
+       "meals": fallback_meals
+  }
 def convert_ai_meal_to_template(meal_data):
    """Convert AI generated meal data to template format"""
    template = get_meal_template()
@@ -1025,9 +1152,16 @@ def generate_7_day_meal_plan(profile, diet_type, cuisine_type):
               
        except Exception as e:
            print(f"Error generating meal plan for {day}: {e}")
-           # Using get_meal_template() as basic fallback
-           template = get_meal_template()
+           # Use fallback for this day
+           fallback_data = create_fallback_meal_plan(day, diet_type, cuisine_type, profile, previous_meals)
+           template = convert_ai_meal_to_template(fallback_data)
            meal_plan[day.lower()] = template
+          
+           # Track fallback meals too
+           day_meals = extract_main_meals(fallback_data)
+           previous_meals['breakfasts'].extend(day_meals['breakfasts'])
+           previous_meals['lunches'].extend(day_meals['lunches'])
+           previous_meals['dinners'].extend(day_meals['dinners'])
   
    return meal_plan
 
@@ -1181,6 +1315,7 @@ def detect_diet_preference(text):
     
     print("DEBUG: No diet pattern matched")
     return None
+  
 
 
 def detect_cuisine_preference(text):
@@ -1267,7 +1402,6 @@ def detect_cuisine_preference(text):
    print("DEBUG: No cuisine pattern matched")
    return None
 
-
 def get_diet_specific_restrictions(diet_type):
     """Get specific food restrictions and guidelines for each diet type"""
     
@@ -1320,6 +1454,107 @@ def get_diet_specific_restrictions(diet_type):
     }
     
     return restrictions.get(diet_type, restrictions["vegetarian"])
+
+def format_meal_plan_for_display(meal_plan, profile, diet_type, cuisine_type):
+    """Format meal plan data for frontend display with proper structure"""
+    
+    # Calculate total nutrition across all days
+    total_nutrition = {'calories': 0, 'protein': 0, 'carbs': 0, 'fat': 0}
+    formatted_days = []
+    
+    for day_name, day_data in meal_plan.items():
+        day_nutrition = {'calories': 0, 'protein': 0, 'carbs': 0, 'fat': 0}
+        formatted_meals = []
+        
+        # Process each meal slot
+        for meal_slot in day_data:
+            slot_nutrition = {'calories': 0, 'protein': 0, 'carbs': 0, 'fat': 0}
+            formatted_foods = []
+            
+            for food in meal_slot.get('foodList', []):
+                formatted_foods.append({
+                    'name': food.get('name', ''),
+                    'quantity': food.get('quantity', ''),
+                    'calories': food.get('calories', 0),
+                    'protein': food.get('protein', 0),
+                    'carbs': food.get('carbs', 0),
+                    'fat': food.get('fat', 0),
+                    'image': food.get('pic', '')
+                })
+                
+                # Add to slot nutrition
+                slot_nutrition['calories'] += food.get('calories', 0)
+                slot_nutrition['protein'] += food.get('protein', 0)
+                slot_nutrition['carbs'] += food.get('carbs', 0)
+                slot_nutrition['fat'] += food.get('fat', 0)
+            
+            formatted_meals.append({
+                'id': meal_slot.get('id'),
+                'title': meal_slot.get('title'),
+                'timeRange': meal_slot.get('timeRange'),
+                'foods': formatted_foods,
+                'nutrition': {
+                    'calories': round(slot_nutrition['calories']),
+                    'protein': round(slot_nutrition['protein'], 1),
+                    'carbs': round(slot_nutrition['carbs'], 1),
+                    'fat': round(slot_nutrition['fat'], 1)
+                },
+                'foodCount': len(formatted_foods)
+            })
+            
+            # Add to day nutrition
+            day_nutrition['calories'] += slot_nutrition['calories']
+            day_nutrition['protein'] += slot_nutrition['protein']
+            day_nutrition['carbs'] += slot_nutrition['carbs']
+            day_nutrition['fat'] += slot_nutrition['fat']
+        
+        formatted_days.append({
+            'dayName': day_name.replace('_', ' ').title(),
+            'dayKey': day_name,
+            'meals': formatted_meals,
+            'dailyNutrition': {
+                'calories': round(day_nutrition['calories']),
+                'protein': round(day_nutrition['protein'], 1),
+                'carbs': round(day_nutrition['carbs'], 1),
+                'fat': round(day_nutrition['fat'], 1)
+            },
+            'totalMeals': len([meal for meal in formatted_meals if meal['foodCount'] > 0])
+        })
+        
+        # Add to total nutrition
+        total_nutrition['calories'] += day_nutrition['calories']
+        total_nutrition['protein'] += day_nutrition['protein']
+        total_nutrition['carbs'] += day_nutrition['carbs']
+        total_nutrition['fat'] += day_nutrition['fat']
+    
+    # Calculate averages
+    num_days = len(formatted_days)
+    avg_nutrition = {
+        'calories': round(total_nutrition['calories'] / num_days) if num_days > 0 else 0,
+        'protein': round(total_nutrition['protein'] / num_days, 1) if num_days > 0 else 0,
+        'carbs': round(total_nutrition['carbs'] / num_days, 1) if num_days > 0 else 0,
+        'fat': round(total_nutrition['fat'] / num_days, 1) if num_days > 0 else 0
+    }
+    
+    return {
+        'templateInfo': {
+            'clientGoal': profile.get('weight_delta_text', ''),
+            'targetCalories': profile.get('target_calories', 0),
+            'dietType': diet_type.replace('_', ' ').title(),
+            'cuisineType': cuisine_type.replace('_', ' ').title(),
+            'totalDays': num_days
+        },
+        'nutritionSummary': {
+            'daily': avg_nutrition,
+            'weekly': {
+                'calories': round(total_nutrition['calories']),
+                'protein': round(total_nutrition['protein'], 1),
+                'carbs': round(total_nutrition['carbs'], 1),
+                'fat': round(total_nutrition['fat'], 1)
+            }
+        },
+        'days': formatted_days
+    }
 
 
 def get_protein_suggestions(diet_type, cuisine):
@@ -1473,7 +1708,8 @@ def validate_diet_compliance(meal_data, diet_type):
     return True
 
 
-@router.get("/chat/stream", dependencies=[Depends(RateLimiter(times=30, seconds=60))])
+@router.get("/chat/stream")
+# @router.get("/chat/stream", dependencies=[Depends(RateLimiter(times=30, seconds=60))])
 async def chat_stream(
    user_id: int,
    client_id: int = Query(..., description="Client ID for whom to create meal plan"),
@@ -1566,7 +1802,7 @@ Now, please choose your cuisine preference:
 • **Commonly Available** - Simple, everyday foods that are widely accessible
 
 
-Please type one of: "North Indian", "South Indian", or "Commonly Available
+Please type one of: "North Indian", "South Indian", or "Commonly Available"
 Note: For Ketogenic and Paleo diets, I can include specialized ingredients that might be less common in regular Indian stores if needed for proper nutrition."""
                   
                    yield f"data: {json.dumps({'message': cuisine_msg, 'type': 'cuisine_selection'})}\n\n"
@@ -1626,6 +1862,19 @@ Examples:
                         return
                     
                     # FIRST: Send the meal plan data (so user sees it)
+                    formatted_template = format_meal_plan_for_display(meal_plan, profile, diet_type, cuisine_type)
+                    yield sse_json({
+                        "type": "meal_template_display",
+                        "status": "formatted",
+                        "templateData": formatted_template,
+                        "metadata": {
+                            "createdAt": datetime.now().isoformat(),
+                            "dietType": diet_type,
+                            "cuisineType": cuisine_type
+                        }
+                    })
+
+                    # Also send raw meal plan data (for backend processing)  
                     yield sse_json({
                         "type": "meal_plan",
                         "status": "created",
@@ -1635,7 +1884,7 @@ Examples:
                         "goal": profile['weight_delta_text'],
                         "meal_plan": meal_plan
                     })
-                    
+                                        
                     # THEN: Ask about name changes (after user sees meal plan)
                     await mem.set_pending(user_id, {
                         "state": "awaiting_name_change",
@@ -1649,18 +1898,18 @@ Examples:
                     # Show success message with better name change options
                     success_msg = f"""✅ Your 7-day {diet_type} {cuisine_display} meal plan has been created!
 
-            The plan includes:
-            - Monday to Sunday templates
-            - {profile['target_calories']} calories per day (approximately)  
-            - Meals optimized for: {profile['weight_delta_text']}
-            - {cuisine_display} cuisine focus
-            - 7 meal slots per day (Early Morning to Dinner)
-            - Proper portion sizes with units (grams, ml, pieces)
+The plan includes:
+- Monday to Sunday templates
+- {profile['target_calories']} calories per day (approximately)  
+- Meals optimized for: {profile['weight_delta_text']}
+- {cuisine_display} cuisine focus
+- 7 meal slots per day (Early Morning to Dinner)
+- Proper portion sizes with units (grams, ml, pieces)
 
-            You can now:
-            - Tell me about any food allergies/restrictions (e.g., "I am allergic to peanuts", "remove dairy items")
-            - Type "yes" to customize day names
-            - Type "no" to finalize with current names (Monday-Sunday)"""
+You can now:
+- Tell me about any food allergies/restrictions (e.g., "I am allergic to peanuts", "remove dairy items")
+- Type "yes" to customize day names
+- Type "no" to finalize with current names (Monday-Sunday)"""
                     
                     yield f"data: {json.dumps({'message': success_msg, 'type': 'meal_plan_created'})}\n\n"
                     yield "event: done\ndata: [DONE]\n\n"
@@ -1693,9 +1942,7 @@ Examples:
               
                return StreamingResponse(_ask_cuisine_again(), media_type="text/event-stream",
                                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-       ##################################
-       # Handle name change confirmation
-            # Handle name change confirmation
+
        # Handle name change and allergy check
        elif pending_state and pending_state.get("state") == "awaiting_name_change":
             print("DEBUG: In awaiting_name_change state")
@@ -1771,18 +2018,18 @@ Examples:
                             
                             success_msg = f"""✅ Your 7-day meal plan has been completely regenerated to avoid: {avoid_text}
 
-        The new plan includes:
-        - {len(new_meal_plan)} unique daily meal plans
-        - {unique_breakfasts} different breakfast items across the week
-        - {unique_lunches} different lunch items across the week  
-        - {unique_dinners} different dinner items across the week
-        - Same calorie target: {pending_state.get('profile', {}).get('target_calories', 0)} calories/day
-        - Same cuisine preference: {pending_state.get('cuisine_type', '').replace('_', ' ').title()}
-        - Safe alternatives for all restricted items
+The new plan includes:
+- {len(new_meal_plan)} unique daily meal plans
+- {unique_breakfasts} different breakfast items across the week
+- {unique_lunches} different lunch items across the week  
+- {unique_dinners} different dinner items across the week
+- Same calorie target: {pending_state.get('profile', {}).get('target_calories', 0)} calories/day
+- Same cuisine preference: {pending_state.get('cuisine_type', '').replace('_', ' ').title()}
+- Safe alternatives for all restricted items
 
-        Now, would you like to customize day names?
-        - Type "yes" to customize day names  
-        - Type "no" to finalize with current names (Monday-Sunday)"""
+Now, would you like to customize day names?
+- Type "yes" to customize day names  
+- Type "no" to finalize with current names (Monday-Sunday)"""
                             
                             yield f"data: {json.dumps({'message': success_msg, 'type': 'meal_plan_updated_success'})}\n\n"
                             yield "event: done\ndata: [DONE]\n\n"
@@ -1800,22 +2047,22 @@ Examples:
                 
                 return StreamingResponse(_regenerate_with_restrictions(), media_type="text/event-stream",
                                         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-           ########################################################################## 
+            
             # Handle regular yes/no for name change
             elif is_yes(text):
                 async def _ask_which_days():
                     msg = """You can customize day names individually. Current names are:
 
-        1. Monday    2. Tuesday    3. Wednesday    4. Thursday
-        5. Friday    6. Saturday   7. Sunday
+1. Monday    2. Tuesday    3. Wednesday    4. Thursday
+5. Friday    6. Saturday   7. Sunday
 
-        Which day(s) would you like to rename? You can:
-        - Type a number (1-7) to change one day: "3"
-        - Type multiple numbers: "1, 3, 5" 
-        - Type "all" to change all days
-        - Type "cancel" to keep current names
+Which day(s) would you like to rename? You can:
+- Type a number (1-7) to change one day: "3"
+- Type multiple numbers: "1, 3, 5" 
+- Type "all" to change all days
+- Type "cancel" to keep current names
 
-        Example: Type "2" to change only Tuesday"""
+Example: Type "2" to change only Tuesday"""
                     
                     await mem.set_pending(user_id, {
                         "state": "awaiting_day_selection",
@@ -1859,7 +2106,6 @@ Examples:
                 
                 return StreamingResponse(_ask_name_change_again(), media_type="text/event-stream",
                                         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-        #############################################################################################
 
         # Handle which days to change
        elif pending_state and pending_state.get("state") == "awaiting_day_selection":
@@ -1885,9 +2131,9 @@ Examples:
                 async def _ask_all_names():
                     msg = """Please provide new names for all 7 days, separated by commas:
 
-        Example: "Detox Day, Power Monday, Wellness Day, Fit Day, Strong Day, Active Day, Rest Day"
+Example: "Detox Day, Power Monday, Wellness Day, Fit Day, Strong Day, Active Day, Rest Day"
 
-        Or type "cancel" to go back."""
+Or type "cancel" to go back."""
                     
                     await mem.set_pending(user_id, {
                         "state": "awaiting_all_names",
@@ -1917,20 +2163,20 @@ Examples:
                             if len(valid_numbers) == 1:
                                 msg = f"""You selected day {valid_numbers[0]} ({default_names[valid_numbers[0]-1]}).
 
-        Please enter the new name for this day:
+Please enter the new name for this day:
 
-        Example: "Wellness Wednesday"
+Example: "Wellness Wednesday"
 
-        Or type "cancel" to go back."""
+Or type "cancel" to go back."""
                             else:
                                 selected_days = [default_names[i-1] for i in valid_numbers]
                                 msg = f"""You selected days: {', '.join(selected_days)}
 
-        Please provide new names for these {len(valid_numbers)} days, separated by commas:
+Please provide new names for these {len(valid_numbers)} days, separated by commas:
 
-        Example: "Power Day, Wellness Day"
+Example: "Power Day, Wellness Day"
 
-        Or type "cancel" to go back."""
+Or type "cancel" to go back."""
                             
                             await mem.set_pending(user_id, {
                                 "state": "awaiting_selected_names",
@@ -2086,16 +2332,16 @@ Examples:
                 async def _ask_which_days_after_allergy():
                     msg = """You can customize day names individually. Current names are:
 
-        1. Monday    2. Tuesday    3. Wednesday    4. Thursday
-        5. Friday    6. Saturday   7. Sunday
+1. Monday    2. Tuesday    3. Wednesday    4. Thursday
+5. Friday    6. Saturday   7. Sunday
 
-        Which day(s) would you like to rename? You can:
-        - Type a number (1-7) to change one day: "3"
-        - Type multiple numbers: "1, 3, 5" 
-        - Type "all" to change all days
-        - Type "cancel" to keep current names
+Which day(s) would you like to rename? You can:
+- Type a number (1-7) to change one day: "3"
+- Type multiple numbers: "1, 3, 5" 
+- Type "all" to change all days
+- Type "cancel" to keep current names
 
-        Example: Type "2" to change only Tuesday"""
+Example: Type "2" to change only Tuesday"""
                     
                     await mem.set_pending(user_id, {
                         "state": "awaiting_day_selection",
@@ -2140,50 +2386,40 @@ Examples:
                 
                 return StreamingResponse(_ask_name_change_again_after_allergy(), media_type="text/event-stream",
                                         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-      
-       # Handle case where no pending state exists but user is sending text
-       else:
-           print(f"DEBUG: No valid pending state found. Current state: {pending_state}")
-           
-           # If no pending state exists, treat this as the first interaction and start fresh
-           try:
-               profile = _fetch_profile(db, client_id)
-               print(f"DEBUG: Starting fresh conversation with profile: {profile}")
-              
-               async def _start_fresh():
-                   welcome_msg = f"""Hello! I'm your meal template assistant.
 
-I can see your profile:
+       # Handle case where no pending state exists but user is sending text (FIRST MESSAGE HANDLER)
+       else:
+           print(f"DEBUG: No valid pending state found, treating as first message. Current state: {pending_state}")
+           
+           # Treat any first message as a greeting and show welcome
+           profile = _fetch_profile(db, client_id)
+           print(f"DEBUG: Client profile for first message: {profile}")
+           
+           async def _welcome_with_greeting():
+               # Acknowledge their greeting first
+               greeting_response = "Hello! Nice to meet you. I'm your meal template assistant."
+               yield f"data: {json.dumps({'message': greeting_response, 'type': 'greeting_response'})}\n\n"
+               
+               # Then show the welcome message with profile info
+               welcome_msg = f"""I can see your profile:
 • Current Weight: {profile['current_weight']} kg
 • Target Weight: {profile['target_weight']} kg 
 • Goal: {profile['weight_delta_text']}
 • Daily Calorie Target: {profile['target_calories']} calories
 
-I'll create a personalized 7-day meal template for you. First, are you vegetarian or non-vegetarian or eggetarian or vegan or ketogenic or paleo or jain?
-
-(You said: "{text}")"""
-                  
-                   await mem.set_pending(user_id, {
-                       "state": "awaiting_diet_preference",
-                       "client_id": client_id,
-                       "profile": profile
-                   })
-                  
-                   yield f"data: {json.dumps({'message': welcome_msg, 'type': 'welcome'})}\n\n"
-                   yield "event: done\ndata: [DONE]\n\n"
-              
-               return StreamingResponse(_start_fresh(), media_type="text/event-stream",
-                                       headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-                                      
-           except Exception as e:
-               print(f"Error starting fresh conversation: {e}")
-               print(f"Fresh start traceback: {traceback.format_exc()}")
-               async def _error_start():
-                   yield f"data: {json.dumps({'message': 'Error starting conversation. Please check the client ID and try again.', 'type': 'error'})}\n\n"
-                   yield "event: done\ndata: [DONE]\n\n"
-              
-               return StreamingResponse(_error_start(), media_type="text/event-stream",
-                                       headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+I'll create a personalized 7-day meal template for you. First, are you vegetarian or non-vegetarian or eggetarian or vegan or ketogenic or paleo or jain?"""
+               
+               await mem.set_pending(user_id, {
+                   "state": "awaiting_diet_preference",
+                   "client_id": client_id,
+                   "profile": profile
+               })
+               
+               yield f"data: {json.dumps({'message': welcome_msg, 'type': 'welcome'})}\n\n"
+               yield "event: done\ndata: [DONE]\n\n"
+           
+           return StreamingResponse(_welcome_with_greeting(), media_type="text/event-stream",
+                                   headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
   
    except Exception as e:
        print(f"Critical error in chat_stream: {e}")
@@ -2202,8 +2438,17 @@ I'll create a personalized 7-day meal template for you. First, are you vegetaria
                                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+
+
+
+
+
+
+
 class UserId(BaseModel):
    user_id: int
+
+
 
 
 @router.get("/debug_pending")
@@ -2219,6 +2464,8 @@ async def debug_pending(
        return {"user_id": user_id, "pending_state": None, "error": str(e), "status": "error"}
 
 
+
+
 @router.post("/clear_pending")
 async def clear_pending_state(
    req: UserId,
@@ -2230,6 +2477,8 @@ async def clear_pending_state(
        return {"status": "cleared", "user_id": req.user_id}
    except Exception as e:
        return {"status": "error", "user_id": req.user_id, "error": str(e)}
+
+
 
 
 @router.post("/delete_chat")
@@ -2247,6 +2496,8 @@ async def delete_chat(
    except Exception as e:
        print(f"Error deleting chat for user {req.user_id}: {e}")
        return {"status": "error", "user_id": req.user_id, "error": str(e)}
+
+
 
 
 @router.get("/test_diet_detection")
@@ -2269,3 +2520,5 @@ async def test_cuisine_detection(text: str):
        "detected_cuisine": result,
        "status": "success" if result else "no_match"
    }
+
+
