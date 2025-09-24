@@ -344,8 +344,159 @@ def get_standard_quantity_for_food(food_name):
     return "100 grams | 1/2 cup | 1 serving"
 
 
-#######ALLERGY##############################
-# ADD THESE TWO FUNCTIONS HERE (after get_standard_quantity_for_food function)
+def format_meal_plan_for_user_display(meal_plan, diet_type, cuisine_type, target_calories):
+    """Format meal plan data into an attractive user-friendly display"""
+    
+    formatted_display = {
+        "type": "meal_plan_display",
+        "diet_type": diet_type,
+        "cuisine_type": cuisine_type.replace('_', ' ').title(),
+        "target_calories_per_day": target_calories,
+        "total_days": len(meal_plan),
+        "days": []
+    }
+    
+    # Process each day
+    for day_name, day_meals in meal_plan.items():
+        day_display = {
+            "day_name": day_name.replace('_', ' ').title(),
+            "day_key": day_name,
+            "total_day_calories": 0,
+            "total_day_protein": 0,
+            "total_day_carbs": 0,
+            "total_day_fat": 0,
+            "meal_slots": []
+        }
+        
+        # Process each meal slot for this day
+        for meal_slot in day_meals:
+            slot_display = {
+                "slot_id": meal_slot.get("id"),
+                "title": meal_slot.get("title", ""),
+                "time_range": meal_slot.get("timeRange", ""),
+                "foods": [],
+                "slot_calories": 0,
+                "slot_protein": 0,
+                "slot_carbs": 0,
+                "slot_fat": 0,
+                "food_count": meal_slot.get("itemsCount", 0)
+            }
+            
+            # Process each food item in this slot
+            for food_item in meal_slot.get("foodList", []):
+                food_display = {
+                    "name": food_item.get("name", ""),
+                    "quantity": food_item.get("quantity", ""),
+                    "calories": food_item.get("calories", 0),
+                    "protein": food_item.get("protein", 0),
+                    "carbs": food_item.get("carbs", 0),
+                    "fat": food_item.get("fat", 0),
+                    "date": food_item.get("date", ""),
+                    "editable": True,
+                    "food_id": food_item.get("id", "")
+                }
+                
+                slot_display["foods"].append(food_display)
+                
+                # Add to slot totals
+                slot_display["slot_calories"] += food_display["calories"]
+                slot_display["slot_protein"] += food_display["protein"]
+                slot_display["slot_carbs"] += food_display["carbs"]
+                slot_display["slot_fat"] += food_display["fat"]
+            
+            # Round slot totals
+            slot_display["slot_calories"] = round(slot_display["slot_calories"])
+            slot_display["slot_protein"] = round(slot_display["slot_protein"], 1)
+            slot_display["slot_carbs"] = round(slot_display["slot_carbs"], 1)
+            slot_display["slot_fat"] = round(slot_display["slot_fat"], 1)
+            
+            day_display["meal_slots"].append(slot_display)
+            
+            # Add to day totals
+            day_display["total_day_calories"] += slot_display["slot_calories"]
+            day_display["total_day_protein"] += slot_display["slot_protein"]
+            day_display["total_day_carbs"] += slot_display["slot_carbs"]
+            day_display["total_day_fat"] += slot_display["slot_fat"]
+        
+        # Round day totals
+        day_display["total_day_calories"] = round(day_display["total_day_calories"])
+        day_display["total_day_protein"] = round(day_display["total_day_protein"], 1)
+        day_display["total_day_carbs"] = round(day_display["total_day_carbs"], 1)
+        day_display["total_day_fat"] = round(day_display["total_day_fat"], 1)
+        
+        formatted_display["days"].append(day_display)
+    
+    return formatted_display
+
+def create_user_friendly_meal_plan_message(meal_plan, diet_type, cuisine_type, target_calories):
+    """Create a formatted text message showing the meal plan structure"""
+    
+    message_parts = []
+    message_parts.append(f"Your {diet_type.title()} {cuisine_type.replace('_', ' ').title()} Weekly Meal Plan")
+    message_parts.append(f"Target: {target_calories} calories per day\n")
+    
+    for day_name, day_meals in meal_plan.items():
+        day_display_name = day_name.replace('_', ' ').title()
+        message_parts.append(f"** {day_display_name} **")
+        
+        day_total_calories = 0
+        
+        for meal_slot in day_meals:
+            title = meal_slot.get("title", "")
+            time_range = meal_slot.get("timeRange", "")
+            foods = meal_slot.get("foodList", [])
+            
+            if foods:
+                message_parts.append(f"  {title} ({time_range})")
+                
+                slot_calories = 0
+                for food in foods:
+                    name = food.get("name", "")
+                    quantity = food.get("quantity", "")
+                    calories = food.get("calories", 0)
+                    protein = food.get("protein", 0)
+                    carbs = food.get("carbs", 0)
+                    fat = food.get("fat", 0)
+                    
+                    message_parts.append(f"    • {name}")
+                    message_parts.append(f"      Qty: {quantity}")
+                    message_parts.append(f"      {calories}cal | {protein}g protein | {carbs}g carbs | {fat}g fat")
+                    
+                    slot_calories += calories
+                
+                message_parts.append(f"    Slot Total: {slot_calories} calories\n")
+                day_total_calories += slot_calories
+        
+        message_parts.append(f"  Day Total: {day_total_calories} calories")
+        message_parts.append("=" * 50 + "\n")
+    
+    message_parts.append("You can edit any food item by telling me what you'd like to change!")
+    message_parts.append("Continue with day name customization or finalization when ready.")
+    
+    return "\n".join(message_parts)
+
+def detect_food_edit_request(text):
+    """Detect if user wants to edit a specific food item"""
+    text_lower = text.lower().strip()
+    
+    edit_patterns = [
+        r'change\s+(\w+)\s+(\w+)\s+to\s+(.+)',
+        r'replace\s+(.+)\s+with\s+(.+)',
+        r'edit\s+(\w+)\s+(\w+)',
+        r'modify\s+(.+)',
+        r'update\s+(.+)',
+    ]
+    
+    for pattern in edit_patterns:
+        match = re.search(pattern, text_lower)
+        if match:
+            return {
+                'is_edit_request': True,
+                'original_text': text,
+                'pattern_match': match.groups()
+            }
+    
+    return {'is_edit_request': False}
 
 def detect_food_restrictions(text):
     """Detect food allergies/restrictions from user input"""
@@ -1831,121 +1982,116 @@ Examples:
                                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
       
        # Handle cuisine preference selection 
+       # Handle cuisine preference selection 
        elif pending_state and pending_state.get("state") == "awaiting_cuisine_preference":
-           print("DEBUG: In awaiting_cuisine_preference state")
-          
-           cuisine_type = detect_cuisine_preference(text)
-          
-           if cuisine_type:
-               print(f"DEBUG: Detected cuisine type: {cuisine_type}")
-              
-               # Generate meal plan with both diet and cuisine preferences
-               profile = pending_state.get("profile")
-               diet_type = pending_state.get("diet_type")
-              
-               async def _generate_plan():
-                try:
-                    cuisine_display = cuisine_type.replace('_', ' ').title()
-                    yield f"data: {json.dumps({'message': f'Perfect! Creating a {diet_type} {cuisine_display} 7-day meal plan for you...', 'type': 'progress'})}\n\n"
-                    
-                    print(f"DEBUG: Starting meal plan generation with diet_type={diet_type}, cuisine_type={cuisine_type}")
-                    
-                    meal_plan = generate_7_day_meal_plan(profile, diet_type, cuisine_type)
-                    
-                    print(f"DEBUG: Generated meal plan with {len(meal_plan)} days")
-                    
-                    # Validate meal plan has content
-                    if not meal_plan or len(meal_plan) == 0:
-                        print("ERROR: Empty meal plan generated")
-                        yield f"data: {json.dumps({'message': 'Sorry, I encountered an issue generating your meal plan. Please try again.', 'type': 'error'})}\n\n"
+            print("DEBUG: In awaiting_cuisine_preference state")
+            
+            cuisine_type = detect_cuisine_preference(text)
+            
+            if cuisine_type:
+                print(f"DEBUG: Detected cuisine type: {cuisine_type}")
+                
+                # Generate meal plan with both diet and cuisine preferences
+                profile = pending_state.get("profile")
+                diet_type = pending_state.get("diet_type")
+                
+                async def _generate_plan():
+                    try:
+                        cuisine_display = cuisine_type.replace('_', ' ').title()
+                        yield f"data: {json.dumps({'message': f'Perfect! Creating a {diet_type} {cuisine_display} 7-day meal plan for you...', 'type': 'progress'})}\n\n"
+                        
+                        print(f"DEBUG: Starting meal plan generation with diet_type={diet_type}, cuisine_type={cuisine_type}")
+                        
+                        meal_plan = generate_7_day_meal_plan(profile, diet_type, cuisine_type)
+                        
+                        print(f"DEBUG: Generated meal plan with {len(meal_plan)} days")
+                        
+                        # Validate meal plan has content
+                        if not meal_plan or len(meal_plan) == 0:
+                            print("ERROR: Empty meal plan generated")
+                            yield f"data: {json.dumps({'message': 'Sorry, I encountered an issue generating your meal plan. Please try again.', 'type': 'error'})}\n\n"
+                            yield "event: done\ndata: [DONE]\n\n"
+                            return
+                        
+                        # FIRST: Send the raw meal plan data (for backend processing)
+                        yield sse_json({
+                            "type": "meal_plan",
+                            "status": "created",
+                            "diet_type": diet_type,
+                            "cuisine_type": cuisine_display,
+                            "total_calories_per_day": profile['target_calories'],
+                            "goal": profile['weight_delta_text'],
+                            "meal_plan": meal_plan
+                        })
+                        
+                        # SECOND: Send the formatted display data for frontend
+                        formatted_display = format_meal_plan_for_user_display(
+                            meal_plan, diet_type, cuisine_type, profile['target_calories']
+                        )
+                        yield sse_json({
+                            "type": "meal_plan_formatted", 
+                            "status": "display_ready",
+                            "formatted_data": formatted_display
+                        })
+                        
+                        # THIRD: Send user-friendly text message showing the meal plan
+                        user_message = create_user_friendly_meal_plan_message(
+                            meal_plan, diet_type, cuisine_type, profile['target_calories']
+                        )
+                        yield f"data: {json.dumps({'message': user_message, 'type': 'meal_plan_preview'})}\n\n"
+                        
+                        # FOURTH: Set pending state and ask about customization
+                        await mem.set_pending(user_id, {
+                            "state": "awaiting_name_change_or_edit",
+                            "client_id": pending_state.get("client_id"),
+                            "profile": profile,
+                            "diet_type": diet_type,
+                            "cuisine_type": cuisine_type,
+                            "meal_plan": meal_plan
+                        })
+                        
+                        # FIFTH: Show options message
+                        options_msg = f"""Your {diet_type} {cuisine_display} meal plan is ready!
+
+        What would you like to do next?
+
+        1. Edit Foods: Tell me which food to change
+        Example: "Change Monday breakfast to oatmeal"
+
+        2. Customize Day Names: Type "yes" to rename days
+
+        3. Add Allergies/Restrictions: Tell me what to avoid
+        Example: "I'm allergic to peanuts"
+
+        4. Finalize Plan: Type "no" to complete
+
+        Just tell me what you'd like to do!"""
+                        
+                        yield f"data: {json.dumps({'message': options_msg, 'type': 'meal_plan_options'})}\n\n"
                         yield "event: done\ndata: [DONE]\n\n"
-                        return
-                    
-                    # FIRST: Send the meal plan data (so user sees it)
-                    formatted_template = format_meal_plan_for_display(meal_plan, profile, diet_type, cuisine_type)
-                    yield sse_json({
-                        "type": "meal_template_display",
-                        "status": "formatted",
-                        "templateData": formatted_template,
-                        "metadata": {
-                            "createdAt": datetime.now().isoformat(),
-                            "dietType": diet_type,
-                            "cuisineType": cuisine_type
-                        }
-                    })
-
-                    # Also send raw meal plan data (for backend processing)  
-                    yield sse_json({
-                        "type": "meal_plan",
-                        "status": "created",
-                        "diet_type": diet_type,
-                        "cuisine_type": cuisine_display,
-                        "total_calories_per_day": profile['target_calories'],
-                        "goal": profile['weight_delta_text'],
-                        "meal_plan": meal_plan
-                    })
-                                        
-                    # THEN: Ask about name changes (after user sees meal plan)
-                    await mem.set_pending(user_id, {
-                        "state": "awaiting_name_change",
-                        "client_id": pending_state.get("client_id"),
-                        "profile": profile,
-                        "diet_type": diet_type,
-                        "cuisine_type": cuisine_type,
-                        "meal_plan": meal_plan
-                    })
-                    
-                    # Show success message with better name change options
-                    success_msg = f"""✅ Your 7-day {diet_type} {cuisine_display} meal plan has been created!
-
-The plan includes:
-- Monday to Sunday templates
-- {profile['target_calories']} calories per day (approximately)  
-- Meals optimized for: {profile['weight_delta_text']}
-- {cuisine_display} cuisine focus
-- 7 meal slots per day (Early Morning to Dinner)
-- Proper portion sizes with units (grams, ml, pieces)
-
-You can now:
-- Tell me about any food allergies/restrictions (e.g., "I am allergic to peanuts", "remove dairy items")
-- Type "yes" to customize day names
-- Type "no" to finalize with current names (Monday-Sunday)"""
-                    
-                    yield f"data: {json.dumps({'message': success_msg, 'type': 'meal_plan_created'})}\n\n"
-                    yield "event: done\ndata: [DONE]\n\n"
-                    
-                except Exception as e:
-                    print(f"Error generating meal plan: {e}")
-                    print(f"Meal generation full traceback: {traceback.format_exc()}")
-                    yield f"data: {json.dumps({'message': 'Sorry, there was an error creating your meal plan. Please try again or contact support.', 'type': 'error'})}\n\n"
-                    yield "event: done\ndata: [DONE]\n\n"
-              
-               return StreamingResponse(_generate_plan(), media_type="text/event-stream",
-                                       headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-           else:
-               async def _ask_cuisine_again():
-                   msg = """Please choose from the available cuisine options:
-
-
-• **North Indian** - Type "north indian" or "north"
-• **South Indian** - Type "south indian" or "south" 
-• **Commonly Available** - Type "commonly available" or "common"
-
-
-Examples:
-- "North Indian cuisine"
-- "south"
-- "commonly available foods"
-- "simple everyday meals" """
-                   yield f"data: {json.dumps({'message': msg, 'type': 'clarification'})}\n\n"
-                   yield "event: done\ndata: [DONE]\n\n"
-              
-               return StreamingResponse(_ask_cuisine_again(), media_type="text/event-stream",
-                                       headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+                        
+                    except Exception as e:
+                        print(f"Error generating meal plan: {e}")
+                        print(f"Meal generation full traceback: {traceback.format_exc()}")
+                        yield f"data: {json.dumps({'message': 'Sorry, there was an error creating your meal plan. Please try again or contact support.', 'type': 'error'})}\n\n"
+                        yield "event: done\ndata: [DONE]\n\n"
+                
+                return StreamingResponse(_generate_plan(), media_type="text/event-stream",
+                                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
        # Handle name change and allergy check
-       elif pending_state and pending_state.get("state") == "awaiting_name_change":
+       elif pending_state and pending_state.get("state") == "awaiting_name_change_or_edit":
             print("DEBUG: In awaiting_name_change state")
+
+            # NEW CODE: Check for food edit requests first
+            edit_info = detect_food_edit_request(text)
+            if edit_info['is_edit_request']:
+                async def _handle_food_edit():
+                    yield f"data: {json.dumps({'message': 'Food editing feature is being implemented. For now, please continue with day name customization or finalization.', 'type': 'edit_placeholder'})}\n\n"
+                    yield "event: done\ndata: [DONE]\n\n"
+                
+                return StreamingResponse(_handle_food_edit(), media_type="text/event-stream",
+                                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
             
             # Check for food restrictions/allergies first
             restrictions = detect_food_restrictions(text)
