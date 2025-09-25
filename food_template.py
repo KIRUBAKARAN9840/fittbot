@@ -24,7 +24,15 @@ from app.fittbot_api.v1.client.client_api.chatbot.chatbot_services.llm_helpers i
    explicit_log_command, STYLE_PLAN, is_plan_request,STYLE_CHAT_FORMAT,pretty_plan
 )
 
-
+def ensure_db_session(db: Session):
+    """Ensure database session is active"""
+    try:
+        # Test the connection
+        db.execute("SELECT 1")
+        return True
+    except Exception as e:
+        print(f"Database session error: {e}")
+        return False
 
 
 
@@ -200,39 +208,74 @@ def create_food_item(name, calories, protein, carbs, fat, quantity):
 
 
 def save_meal_plan_to_database(client_id: int, meal_plan: dict, db: Session):
-    """Save meal plan to database"""
+    """Save meal plan to database with better error handling"""
     try:
-        print(f"DEBUG: Saving meal plan for client {client_id}")
+        print(f"DEBUG: Starting database save for client {client_id}")
+        print(f"DEBUG: Meal plan keys: {list(meal_plan.keys())}")
         
-        # Delete existing records
-        db.query(ClientDietTemplate).filter(ClientDietTemplate.client_id == client_id).delete()
+        # Delete existing records for this client
+        deleted_count = db.query(ClientDietTemplate).filter(ClientDietTemplate.client_id == client_id).delete()
+        print(f"DEBUG: Deleted {deleted_count} existing records")
         
         # Day mapping
         day_names = {
             'monday': 'Monday', 'tuesday': 'Tuesday', 'wednesday': 'Wednesday',
-            'thursday': 'Thursday', 'friday': 'Friday', 'saturday': 'Saturday', 'sunday': 'Sunday'
+            'thursday': 'Thursday', 'friday': 'Friday', 'saturday': 'Saturday', 
+            'sunday': 'Sunday'
         }
+        
+        saved_count = 0
         
         # Save each day
         for day_key, day_data in meal_plan.items():
-            day_name = day_names.get(day_key.lower(), day_key.title())
-            diet_data_json = json.dumps(day_data)
-            
-            new_record = ClientDietTemplate(
-                client_id=client_id,
-                template_name=day_name,
-                diet_data=diet_data_json
-            )
-            db.add(new_record)
+            try:
+                # Handle custom day names
+                day_name = day_names.get(day_key.lower(), day_key.replace('_', ' ').title())
+                
+                # Ensure day_data is serializable
+                if isinstance(day_data, str):
+                    diet_data_json = day_data
+                else:
+                    diet_data_json = json.dumps(day_data, ensure_ascii=False, indent=None)
+                
+                print(f"DEBUG: Saving day '{day_name}' (key: {day_key}) with {len(diet_data_json)} chars")
+                
+                new_record = ClientDietTemplate(
+                    client_id=client_id,
+                    template_name=day_name,
+                    diet_data=diet_data_json
+                )
+                db.add(new_record)
+                saved_count += 1
+                
+            except Exception as day_error:
+                print(f"ERROR: Failed to save day {day_key}: {day_error}")
+                continue
         
+        # Commit all changes
         db.commit()
-        print(f"DEBUG: Successfully saved {len(meal_plan)} days")
-        return {'success': True}
+        print(f"DEBUG: Successfully committed {saved_count} records to database")
+        
+        return {
+            'success': True, 
+            'saved_count': saved_count,
+            'message': f'Saved {saved_count} meal templates'
+        }
         
     except Exception as e:
-        print(f"ERROR: Save failed: {e}")
-        db.rollback()
-        return {'success': False, 'error': str(e)}
+        print(f"ERROR: Database save failed: {e}")
+        print(f"ERROR: Full traceback: {traceback.format_exc()}")
+        try:
+            db.rollback()
+            print("DEBUG: Database rollback completed")
+        except Exception as rollback_error:
+            print(f"ERROR: Rollback failed: {rollback_error}")
+        
+        return {
+            'success': False, 
+            'error': str(e),
+            'message': f'Database save failed: {str(e)}'
+        }
 
 
 def get_standard_quantity_for_food(food_name):
@@ -560,6 +603,11 @@ def detect_food_restrictions(text):
     """Detect food allergies/restrictions from user input"""
     text = text.lower().strip()
     
+    # Skip simple action words that aren't about allergies
+    simple_actions = ['remove', 'change', 'edit', 'modify', 'update', 'replace']
+    if text in simple_actions:
+        return None
+    
     # Common allergen patterns
     allergen_patterns = {
         'peanuts': [r'\bpeanut\b', r'\bpeanuts\b', r'\bgroundnut\b', r'\bgroundnuts\b'],
@@ -575,27 +623,31 @@ def detect_food_restrictions(text):
         'onion_garlic': [r'\bonion\b', r'\bgarlic\b', r'\bpyaz\b', r'\blahsun\b']
     }
     
-    # Restriction trigger words
+    # Restriction trigger words - must have both trigger AND specific food
     restriction_triggers = [
-        r'\ballerg\w*\b',  # allergic, allergy
-        r'\bremove\b',
-        r'\bavoid\b',
+        r'\ballerg\w*\s+to\b',  # allergic to
+        r'\bremove.*\b(all|any)\b',  # remove all/any
+        r'\bavoid.*\b(all|any)\b',  # avoid all/any  
         r'\bcan\'?t\s+eat\b',
         r'\bdont?\s+eat\b',
         r'\bdon\'?t\s+eat\b',
         r'\bnot\s+allowed\b',
-        r'\brestrict\w*\b',
-        r'\bintoleran\w*\b',
-        r'\bsensitiv\w*\b',
-        r'\bexclude\b',
-        r'\btake\s+out\b',
-        r'\bno\s+(eating\s+)?\b'
+        r'\brestrict\w*\s+from\b',
+        r'\bintoleran\w*\s+to\b',
+        r'\bsensitiv\w*\s+to\b',
+        r'\bexclude.*from\b',
+        r'\bi\s+am\s+allergic\b',
+        r'\bi\s+have.*allergy\b'
     ]
     
-    # Check if text contains restriction triggers
+    # Check if text contains meaningful restriction triggers
     has_restriction_trigger = any(re.search(pattern, text) for pattern in restriction_triggers)
     
-    if not has_restriction_trigger:
+    # Also check for "no [food]" patterns
+    no_food_pattern = r'\bno\s+(\w+)'
+    no_food_matches = re.findall(no_food_pattern, text)
+    
+    if not has_restriction_trigger and not no_food_matches:
         return None
     
     # Find specific allergens/foods mentioned
@@ -604,19 +656,23 @@ def detect_food_restrictions(text):
         if any(re.search(pattern, text) for pattern in patterns):
             found_restrictions.append(allergen)
     
-    # Also extract any other food names mentioned
+    # Also extract other food names mentioned with restrictions
     other_foods = []
+    if no_food_matches:
+        other_foods.extend(no_food_matches)
+    
+    # Look for foods mentioned after restriction triggers
     words = text.split()
     for i, word in enumerate(words):
-        if any(re.search(trigger, word) for trigger in restriction_triggers):
+        if any(re.search(trigger, ' '.join(words[i:i+3])) for trigger in restriction_triggers):
             for j in range(i+1, min(i+5, len(words))):
                 next_word = words[j].strip('.,!?')
-                if len(next_word) > 2 and next_word not in ['the', 'and', 'or', 'any', 'from', 'plan']:
+                if len(next_word) > 2 and next_word not in ['the', 'and', 'or', 'any', 'from', 'plan', 'all']:
                     other_foods.append(next_word)
     
     result = {
         'found_allergens': found_restrictions,
-        'other_foods': other_foods,
+        'other_foods': list(set(other_foods)),  # Remove duplicates
         'raw_text': text
     }
     
@@ -2145,7 +2201,11 @@ Just tell me what you'd like to do!"""
                                         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
             
             # Check for food restrictions/allergies first
-            restrictions = detect_food_restrictions(text)
+            # Check for food restrictions/allergies first (but not simple "remove" commands)
+            restrictions = None
+            if not text.lower().strip() in ['remove', 'change', 'edit', 'modify', 'update']:
+                restrictions = detect_food_restrictions(text)
+                
             if restrictions:
                 print(f"DEBUG: Detected food restrictions: {restrictions}")
                 
@@ -2269,6 +2329,34 @@ Just tell me what you'd like to do!"""
                                         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
             
+
+
+            # Handle accidental numeric input
+            elif text.strip().isdigit() or re.match(r'^[\d,\s]+$', text.strip()):
+                async def _handle_accidental_number():
+                    msg = """It looks like you entered a number. Here are your options:
+
+            🍽️ **Food Changes**: Say things like:
+            • "I'm allergic to peanuts" 
+            • "Remove dairy from plan"
+            • "I can't eat eggs"
+
+            📝 **Day Names**: Say:
+            • "yes" - to customize day names
+            • "no" - to keep Monday-Sunday  
+
+            ✅ **Finalize**: Say:
+            • "done" or "finalize" to save your plan
+
+            What would you like to do?"""
+                    
+                    yield f"data: {json.dumps({'message': msg, 'type': 'clarification'})}\n\n"
+                    yield "event: done\ndata: [DONE]\n\n"
+                
+                return StreamingResponse(_handle_accidental_number(), media_type="text/event-stream",
+                            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
             # Handle regular yes/no for name change
             elif is_yes(text):
                 async def _ask_which_days():
@@ -2301,7 +2389,7 @@ Example: Type "2" to change only Tuesday"""
                 return StreamingResponse(_ask_which_days(), media_type="text/event-stream",
                                         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
             
-            elif is_no(text):
+            elif is_no(text) or text.lower() in ['finalize', 'finish', 'done', 'save']:
                 # Finalize with default names
                 meal_plan = pending_state.get("meal_plan")
                 client_id = pending_state.get("client_id")
@@ -2309,24 +2397,39 @@ Example: Type "2" to change only Tuesday"""
                 
                 # Store template in memory first
                 await _store_meal_template(mem, db, client_id, meal_plan, template_name)
-                print("meal template is", template_name)
+                print(f"DEBUG: Storing meal template: {template_name}")
                 
-                try:
-                    STRUCT_URL = "http://localhost:8000/food_template/structurize_and_save"
-                    async with httpx.AsyncClient(timeout=20) as client:
-                        await client.post(STRUCT_URL, json={"client_id": client_id, "template": meal_plan})
-                except Exception as e:
-                    print("structurize_and_save failed:", e)
+                # Save to database directly
+                save_result = save_meal_plan_to_database(client_id, meal_plan, db)
+                print(f"DEBUG: Database save result: {save_result}")
                 
                 await mem.clear_pending(user_id)
                 
                 async def _finalize_default():
-                    yield f"data: {json.dumps({'message': 'Your 7-day meal plan is finalized and saved!', 'type': 'finalized'})}\n\n"
+                    if save_result and save_result.get('success'):
+                        message = '✅ Your 7-day meal plan is finalized and saved to database!'
+                        yield sse_json({
+                            "type": "meal_template_saved",
+                            "status": "success",
+                            "template_name": template_name,
+                            "client_id": client_id,
+                            "message": "Successfully saved to database"
+                        })
+                    else:
+                        message = '⚠️ Your 7-day meal plan is finalized but database save failed!'
+                        yield sse_json({
+                            "type": "meal_template_save_failed", 
+                            "status": "error",
+                            "template_name": template_name,
+                            "client_id": client_id,
+                            "error": save_result.get('error', 'Unknown error') if save_result else 'Save function failed'
+                        })
+                    
+                    yield f"data: {json.dumps({'message': message, 'type': 'finalized'})}\n\n"
                     yield sse_json({
                         "type": "meal_template",
-                        "status": "stored",
+                        "status": "stored" if (save_result and save_result.get('success')) else "error",
                         "template_name": template_name,
-                        "info": "Saved.",
                         "meal_plan": meal_plan,
                         "day_names": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
                     })
@@ -2538,10 +2641,18 @@ Or type "cancel" to go back."""
                     if i < len(default_days):
                         updated_meal_plan[custom_name.lower().replace(" ", "_")] = meal_plan.get(default_days[i], get_meal_template())
                 
+                # Save to database
+                client_id = pending_state.get("client_id")
+                save_result = save_meal_plan_to_database(client_id, updated_meal_plan, db)
+
                 await mem.clear_pending(user_id)
                 
                 async def _finalize_selected():
-                    yield f"data: {json.dumps({'message': f'✅ Your meal plan is finalized with names: {', '.join(custom_names)}!', 'type': 'finalized'})}\n\n"
+                    if save_result['success']:
+                        message = f"✅ Your meal plan is finalized with names: {', '.join(custom_names)} and saved!"
+                    else:
+                        message = f"✅ Your meal plan is finalized with names: {', '.join(custom_names)}! (Save failed)"
+                    yield f"data: {json.dumps({'message': message, 'type': 'finalized'})}\n\n"
                     yield sse_json({
                         "type": "meal_plan_final",
                         "status": "completed",
@@ -2602,26 +2713,22 @@ Example: Type "2" to change only Tuesday"""
                 meal_plan = pending_state.get("meal_plan")
                 client_id = pending_state.get("client_id")
                 template_name = "Meal Template (Mon-Sun)"
-                
+
                 # Store template in memory first
                 await _store_meal_template(mem, db, client_id, meal_plan, template_name)
                 print("meal template is", template_name)
-                
-                try:
-                    STRUCT_URL = "http://localhost:8000/food_template/structurize_and_save"
-                    async with httpx.AsyncClient(timeout=20) as client:
-                        await client.post(STRUCT_URL, json={"client_id": client_id, "template": meal_plan})
-                except Exception as e:
-                    print("structurize_and_save failed:", e)
-                
+
+                # Save to database directly
+                save_result = save_meal_plan_to_database(client_id, meal_plan, db)
+
                 await mem.clear_pending(user_id)
-                
+
                 async def _finalize_default():
                     if save_result['success']:
                         message = "Your 7-day meal plan is finalized and saved!"
                     else:
                         message = "Your 7-day meal plan is finalized! (Save failed)"
-                    
+
                     yield f"data: {json.dumps({'message': message, 'type': 'finalized'})}\n\n"
                     yield sse_json({
                         "type": "meal_plan_final",
@@ -2631,7 +2738,7 @@ Example: Type "2" to change only Tuesday"""
                         "day_names": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
                     })
                     yield "event: done\ndata: [DONE]\n\n"
-                
+
                 return StreamingResponse(_finalize_default(), media_type="text/event-stream",
                                         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
             
