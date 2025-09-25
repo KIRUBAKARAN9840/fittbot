@@ -11,6 +11,8 @@ from app.models.fittbot_models import WeightJourney,Client,ClientTarget
 import openai
 from openai import OpenAI
 import json, re, os, random, uuid, traceback
+import httpx
+
 from app.models.fittbot_models import ClientDietTemplate
 
 
@@ -21,6 +23,8 @@ from app.fittbot_api.v1.client.client_api.chatbot.chatbot_services.llm_helpers i
    has_action_verb, food_hits,ensure_per_unit_macros, is_fittbot_meta_query,normalize_food, 
    explicit_log_command, STYLE_PLAN, is_plan_request,STYLE_CHAT_FORMAT,pretty_plan
 )
+
+
 
 
 
@@ -178,6 +182,8 @@ def get_food_image_url(food_name):
 
 
 def create_food_item(name, calories, protein, carbs, fat, quantity):
+   
+
    """Create a food item in the required format with proper quantity"""
    return {
        "id": generate_food_id(),
@@ -191,6 +197,42 @@ def create_food_item(name, calories, protein, carbs, fat, quantity):
        "quantity": quantity,  # Now accepts full quantity string with units
        "timeAdded": ""  # Empty as requested
    }
+
+
+def save_meal_plan_to_database(client_id: int, meal_plan: dict, db: Session):
+    """Save meal plan to database"""
+    try:
+        print(f"DEBUG: Saving meal plan for client {client_id}")
+        
+        # Delete existing records
+        db.query(ClientDietTemplate).filter(ClientDietTemplate.client_id == client_id).delete()
+        
+        # Day mapping
+        day_names = {
+            'monday': 'Monday', 'tuesday': 'Tuesday', 'wednesday': 'Wednesday',
+            'thursday': 'Thursday', 'friday': 'Friday', 'saturday': 'Saturday', 'sunday': 'Sunday'
+        }
+        
+        # Save each day
+        for day_key, day_data in meal_plan.items():
+            day_name = day_names.get(day_key.lower(), day_key.title())
+            diet_data_json = json.dumps(day_data)
+            
+            new_record = ClientDietTemplate(
+                client_id=client_id,
+                template_name=day_name,
+                diet_data=diet_data_json
+            )
+            db.add(new_record)
+        
+        db.commit()
+        print(f"DEBUG: Successfully saved {len(meal_plan)} days")
+        return {'success': True}
+        
+    except Exception as e:
+        print(f"ERROR: Save failed: {e}")
+        db.rollback()
+        return {'success': False, 'error': str(e)}
 
 
 def get_standard_quantity_for_food(food_name):
@@ -341,6 +383,23 @@ def get_standard_quantity_for_food(food_name):
     
     # Default fallback
     return "100 grams | 1/2 cup | 1 serving"
+
+
+async def _store_meal_template(mem, db, user_id, meal_plan, name):
+    """Store meal template using the async method"""
+    try:
+        await mem.set(f"meal_template:{user_id}", {
+            "template": meal_plan,
+            "name": name,
+            "client_id": user_id,
+            "created_at": datetime.now().isoformat()
+        })
+        print(f"Stored meal template '{name}' for user {user_id}")
+        return True
+    except Exception as e:
+        print(f"Failed to store meal template: {e}")
+        return False
+
 
 
 def format_meal_plan_for_user_display(meal_plan, diet_type, cuisine_type, target_calories):
@@ -2245,28 +2304,35 @@ Example: Type "2" to change only Tuesday"""
             elif is_no(text):
                 # Finalize with default names
                 meal_plan = pending_state.get("meal_plan")
+                client_id = pending_state.get("client_id")
+                template_name = "Meal Template (Mon-Sun)"
+                
+                # Store template in memory first
+                await _store_meal_template(mem, db, client_id, meal_plan, template_name)
+                print("meal template is", template_name)
+                
+                try:
+                    STRUCT_URL = "http://localhost:8000/food_template/structurize_and_save"
+                    async with httpx.AsyncClient(timeout=20) as client:
+                        await client.post(STRUCT_URL, json={"client_id": client_id, "template": meal_plan})
+                except Exception as e:
+                    print("structurize_and_save failed:", e)
+                
                 await mem.clear_pending(user_id)
                 
                 async def _finalize_default():
-                    yield f"data: {json.dumps({'message': '✅ Your 7-day meal plan is finalized!', 'type': 'finalized'})}\n\n"
+                    yield f"data: {json.dumps({'message': 'Your 7-day meal plan is finalized and saved!', 'type': 'finalized'})}\n\n"
                     yield sse_json({
-                        "type": "meal_plan_final",
-                        "status": "completed",
-                        "diet_type": pending_state.get("diet_type"),
+                        "type": "meal_template",
+                        "status": "stored",
+                        "template_name": template_name,
+                        "info": "Saved.",
                         "meal_plan": meal_plan,
                         "day_names": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
                     })
                     yield "event: done\ndata: [DONE]\n\n"
                 
                 return StreamingResponse(_finalize_default(), media_type="text/event-stream",
-                                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-            
-            else:
-                async def _ask_name_change_again():
-                    yield f"data: {json.dumps({'message': 'You can either: \\n• Tell me about any food allergies/restrictions (e.g., \"I am allergic to peanuts\")\\n• Say \"yes\" to customize day names\\n• Say \"no\" to finalize the plan', 'type': 'clarification'})}\n\n"
-                    yield "event: done\ndata: [DONE]\n\n"
-                
-                return StreamingResponse(_ask_name_change_again(), media_type="text/event-stream",
                                         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
         # Handle which days to change
@@ -2401,13 +2467,22 @@ Or type "cancel" to go back."""
                     if i < len(default_days):
                         updated_meal_plan[custom_name.lower().replace(" ", "_")] = meal_plan.get(default_days[i], get_meal_template())
                 
+                # Save to database
+                client_id = pending_state.get("client_id")
+                save_result = save_meal_plan_to_database(client_id, updated_meal_plan, db)
+                
                 await mem.clear_pending(user_id)
                 
                 async def _finalize_all_custom():
-                    yield f"data: {json.dumps({'message': f'✅ Your meal plan is finalized with names: {', '.join(custom_names)}!', 'type': 'finalized'})}\n\n"
+                    if save_result['success']:
+                        message = f"Your meal plan is finalized with custom names and saved: {', '.join(custom_names)}!"
+                    else:
+                        message = f"Your meal plan is finalized with names: {', '.join(custom_names)}! (Save failed)"
+                    
+                    yield f"data: {json.dumps({'message': message, 'type': 'finalized'})}\n\n"
                     yield sse_json({
                         "type": "meal_plan_final",
-                        "status": "completed", 
+                        "status": "completed",
                         "diet_type": pending_state.get("diet_type"),
                         "meal_plan": updated_meal_plan,
                         "day_names": custom_names
@@ -2525,10 +2600,29 @@ Example: Type "2" to change only Tuesday"""
             elif is_no(text):
                 # Finalize with default names
                 meal_plan = pending_state.get("meal_plan")
+                client_id = pending_state.get("client_id")
+                template_name = "Meal Template (Mon-Sun)"
+                
+                # Store template in memory first
+                await _store_meal_template(mem, db, client_id, meal_plan, template_name)
+                print("meal template is", template_name)
+                
+                try:
+                    STRUCT_URL = "http://localhost:8000/food_template/structurize_and_save"
+                    async with httpx.AsyncClient(timeout=20) as client:
+                        await client.post(STRUCT_URL, json={"client_id": client_id, "template": meal_plan})
+                except Exception as e:
+                    print("structurize_and_save failed:", e)
+                
                 await mem.clear_pending(user_id)
                 
-                async def _finalize_default_after_allergy():
-                    yield f"data: {json.dumps({'message': '✅ Your 7-day meal plan is finalized!', 'type': 'finalized'})}\n\n"
+                async def _finalize_default():
+                    if save_result['success']:
+                        message = "Your 7-day meal plan is finalized and saved!"
+                    else:
+                        message = "Your 7-day meal plan is finalized! (Save failed)"
+                    
+                    yield f"data: {json.dumps({'message': message, 'type': 'finalized'})}\n\n"
                     yield sse_json({
                         "type": "meal_plan_final",
                         "status": "completed",
@@ -2538,7 +2632,7 @@ Example: Type "2" to change only Tuesday"""
                     })
                     yield "event: done\ndata: [DONE]\n\n"
                 
-                return StreamingResponse(_finalize_default_after_allergy(), media_type="text/event-stream",
+                return StreamingResponse(_finalize_default(), media_type="text/event-stream",
                                         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
             
             else:
@@ -2684,3 +2778,113 @@ async def test_cuisine_detection(text: str):
    }
 
 
+@router.get("/get_saved_template/{client_id}")
+async def get_saved_template(client_id: int, db: Session = Depends(get_db)):
+    """Get saved meal plan template for a client"""
+    try:
+        templates = db.query(ClientDietTemplate).filter(
+            ClientDietTemplate.client_id == client_id
+        ).order_by(ClientDietTemplate.template_name).all()
+        
+        if not templates:
+            return {"status": "error", "message": "No saved templates found"}
+        
+        meal_plan = {}
+        for template in templates:
+            day_key = template.template_name.lower()
+            day_data = json.loads(template.diet_data)
+            meal_plan[day_key] = day_data
+        
+        return {"status": "success", "client_id": client_id, "meal_plan": meal_plan, "total_days": len(templates)}
+        
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@router.delete("/delete_saved_template/{client_id}")
+async def delete_saved_template(client_id: int, db: Session = Depends(get_db)):
+    """Delete saved meal plan templates for a client"""
+    try:
+        count = db.query(ClientDietTemplate).filter(ClientDietTemplate.client_id == client_id).delete()
+        db.commit()
+        
+        if count == 0:
+            return {"status": "error", "message": "No templates found to delete"}
+        
+        return {"status": "success", "message": f"Deleted {count} templates", "deleted_count": count}
+        
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "message": str(e)}
+    
+
+@router.get("/test_db_connection")
+async def test_db_connection(db: Session = Depends(get_db)):
+    """Test if database connection works"""
+    try:
+        count = db.query(ClientDietTemplate).count()
+        return {"status": "success", "table_exists": True, "current_records": count}
+    except Exception as e:
+        return {"status": "error", "message": str(e), "table_exists": False}
+    
+
+@router.get("/check_saved/{client_id}")
+async def check_saved(client_id: int, db: Session = Depends(get_db)):
+    """Check if templates are saved"""
+    try:
+        count = db.query(ClientDietTemplate).filter(ClientDietTemplate.client_id == client_id).count()
+        return {"client_id": client_id, "saved_templates": count}
+    except Exception as e:
+        return {"error": str(e)}
+    
+
+@router.post("/structurize_and_save")
+async def structurize_and_save_meal_template(
+    request: dict,
+    db: Session = Depends(get_db)
+):
+    """Structurize and save meal template to database"""
+    try:
+        client_id = request.get("client_id")
+        meal_plan = request.get("template")
+        
+        if not client_id or not meal_plan:
+            return {"status": "error", "message": "Missing client_id or template"}
+        
+        print(f"DEBUG: Structurizing meal template for client {client_id}")
+        
+        # Delete existing templates
+        db.query(ClientDietTemplate).filter(ClientDietTemplate.client_id == client_id).delete()
+        
+        # Day mapping
+        day_names = {
+            'monday': 'Monday', 'tuesday': 'Tuesday', 'wednesday': 'Wednesday',
+            'thursday': 'Thursday', 'friday': 'Friday', 'saturday': 'Saturday', 'sunday': 'Sunday'
+        }
+        
+        # Save each day
+        templates_created = 0
+        for day_key, day_data in meal_plan.items():
+            day_name = day_names.get(day_key.lower(), day_key.title())
+            diet_data_json = json.dumps(day_data)
+            
+            new_template = ClientDietTemplate(
+                client_id=client_id,
+                template_name=day_name,
+                diet_data=diet_data_json
+            )
+            db.add(new_template)
+            templates_created += 1
+        
+        db.commit()
+        print(f"DEBUG: Successfully saved {templates_created} meal templates")
+        
+        return {
+            "status": "success", 
+            "message": f"Saved {templates_created} meal templates",
+            "templates_created": templates_created
+        }
+        
+    except Exception as e:
+        print(f"ERROR: Structurize and save failed: {e}")
+        db.rollback()
+        return {"status": "error", "message": str(e)}
