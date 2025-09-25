@@ -11,6 +11,7 @@ from app.models.fittbot_models import WeightJourney,Client,ClientTarget
 import openai
 from openai import OpenAI
 import json, re, os, random, uuid, traceback
+from app.models.fittbot_models import ClientDietTemplate
 
 
 from app.fittbot_api.v1.client.client_api.chatbot.chatbot_services.llm_helpers import (
@@ -20,8 +21,6 @@ from app.fittbot_api.v1.client.client_api.chatbot.chatbot_services.llm_helpers i
    has_action_verb, food_hits,ensure_per_unit_macros, is_fittbot_meta_query,normalize_food, 
    explicit_log_command, STYLE_PLAN, is_plan_request,STYLE_CHAT_FORMAT,pretty_plan
 )
-
-
 
 
 
@@ -2053,19 +2052,12 @@ Examples:
                         # FIFTH: Show options message
                         options_msg = f"""Your {diet_type} {cuisine_display} meal plan is ready!
 
-        What would you like to do next?
+🍽️ What would you like to do next?
 
-        1. Edit Foods: Tell me which food to change
-        Example: "Change Monday breakfast to oatmeal"
+✨ Edit Foods – If you don’t like any food or have an allergy, just say "remove" and I’ll add an alternate for you.
+or say nothing or "no" to finalize the plan.
 
-        2. Customize Day Names: Type "yes" to rename days
-
-        3. Add Allergies/Restrictions: Tell me what to avoid
-        Example: "I'm allergic to peanuts"
-
-        4. Finalize Plan: Type "no" to complete
-
-        Just tell me what you'd like to do!"""
+Just tell me what you'd like to do!"""
                         
                         yield f"data: {json.dumps({'message': options_msg, 'type': 'meal_plan_options'})}\n\n"
                         yield "event: done\ndata: [DONE]\n\n"
@@ -2106,7 +2098,7 @@ Examples:
                         
                         yield f"data: {json.dumps({'message': f'I understand you want to avoid: {avoid_text}. Let me regenerate your complete 7-day meal plan without these items. This may take a moment...', 'type': 'allergy_detected'})}\n\n"
                         
-                        # Regenerate complete 7-day meal plan (returns the full meal_plan dict)
+                        # Regenerate complete 7-day meal plan
                         new_meal_plan = regenerate_meal_plan_without_allergens(
                             pending_state.get("meal_plan"),
                             restrictions,
@@ -2124,19 +2116,42 @@ Examples:
                                 "profile": pending_state.get("profile"),
                                 "diet_type": pending_state.get("diet_type"),
                                 "cuisine_type": pending_state.get("cuisine_type"),
-                                "meal_plan": new_meal_plan,  # This is now the complete 7-day plan
+                                "meal_plan": new_meal_plan,
                                 "avoided_foods": avoid_items
                             })
                             
-                            # Send updated meal plan
+                            # FIRST: Send updated raw meal plan data
                             yield sse_json({
                                 "type": "meal_plan_updated",
                                 "status": "regenerated", 
+                                "diet_type": pending_state.get("diet_type"),
                                 "avoided_foods": avoid_items,
-                                "meal_plan": new_meal_plan  # Full 7-day plan with variety
+                                "meal_plan": new_meal_plan
                             })
                             
-                            # Calculate unique meals across all days for confirmation
+                            # SECOND: Send the formatted display data for frontend (THIS WAS MISSING!)
+                            formatted_display = format_meal_plan_for_user_display(
+                                new_meal_plan, 
+                                pending_state.get("diet_type"), 
+                                pending_state.get("cuisine_type"), 
+                                pending_state.get("profile", {}).get('target_calories', 2000)
+                            )
+                            yield sse_json({
+                                "type": "meal_plan_formatted_updated", 
+                                "status": "display_ready",
+                                "formatted_data": formatted_display
+                            })
+                            
+                            # THIRD: Send user-friendly text message showing the updated meal plan
+                            user_message = create_user_friendly_meal_plan_message(
+                                new_meal_plan, 
+                                pending_state.get("diet_type"), 
+                                pending_state.get("cuisine_type"), 
+                                pending_state.get("profile", {}).get('target_calories', 2000)
+                            )
+                            yield f"data: {json.dumps({'message': user_message, 'type': 'updated_meal_plan_preview'})}\n\n"
+                            
+                            # FOURTH: Calculate and show summary
                             all_breakfasts = []
                             all_lunches = []
                             all_dinners = []
@@ -2162,20 +2177,20 @@ Examples:
                             unique_lunches = len(set(all_lunches))
                             unique_dinners = len(set(all_dinners))
                             
-                            success_msg = f"""✅ Your 7-day meal plan has been completely regenerated to avoid: {avoid_text}
+                            success_msg = f"""Your 7-day meal plan has been completely regenerated to avoid: {avoid_text}
 
-The new plan includes:
-- {len(new_meal_plan)} unique daily meal plans
-- {unique_breakfasts} different breakfast items across the week
-- {unique_lunches} different lunch items across the week  
-- {unique_dinners} different dinner items across the week
-- Same calorie target: {pending_state.get('profile', {}).get('target_calories', 0)} calories/day
-- Same cuisine preference: {pending_state.get('cuisine_type', '').replace('_', ' ').title()}
-- Safe alternatives for all restricted items
+            The new plan includes:
+            - {len(new_meal_plan)} unique daily meal plans
+            - {unique_breakfasts} different breakfast items across the week
+            - {unique_lunches} different lunch items across the week  
+            - {unique_dinners} different dinner items across the week
+            - Same calorie target: {pending_state.get('profile', {}).get('target_calories', 0)} calories/day
+            - Same cuisine preference: {pending_state.get('cuisine_type', '').replace('_', ' ').title()}
+            - Safe alternatives for all restricted items
 
-Now, would you like to customize day names?
-- Type "yes" to customize day names  
-- Type "no" to finalize with current names (Monday-Sunday)"""
+            Now, would you like to customize day names?
+            - Type "yes" to customize day names  
+            - Type "no" to finalize with current names (Monday-Sunday)"""
                             
                             yield f"data: {json.dumps({'message': success_msg, 'type': 'meal_plan_updated_success'})}\n\n"
                             yield "event: done\ndata: [DONE]\n\n"
@@ -2193,6 +2208,7 @@ Now, would you like to customize day names?
                 
                 return StreamingResponse(_regenerate_with_restrictions(), media_type="text/event-stream",
                                         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
             
             # Handle regular yes/no for name change
             elif is_yes(text):
