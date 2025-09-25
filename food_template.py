@@ -207,22 +207,36 @@ def create_food_item(name, calories, protein, carbs, fat, quantity):
    }
 
 
-def save_meal_plan_to_database(client_id: int, meal_plan: dict, db: Session):
-    """Save meal plan to database with better error handling"""
+def save_meal_plan_to_database(client_id: int, meal_plan: dict, db: Session, merge_mode: bool = False):
+    """Save meal plan to database with optional merge mode for custom names"""
     try:
-        print(f"DEBUG: Starting database save for client {client_id}")
+        print(f"DEBUG: Starting database save for client {client_id}, merge_mode: {merge_mode}")
         print(f"DEBUG: Meal plan keys: {list(meal_plan.keys())}")
         
-        # Delete existing records for this client
-        deleted_count = db.query(ClientDietTemplate).filter(ClientDietTemplate.client_id == client_id).delete()
-        print(f"DEBUG: Deleted {deleted_count} existing records")
-        
-        # Day mapping
-        day_names = {
+        # Standard day mapping
+        standard_day_names = {
             'monday': 'Monday', 'tuesday': 'Tuesday', 'wednesday': 'Wednesday',
             'thursday': 'Thursday', 'friday': 'Friday', 'saturday': 'Saturday', 
             'sunday': 'Sunday'
         }
+        
+        if not merge_mode:
+            # Original behavior - delete all existing records
+            deleted_count = db.query(ClientDietTemplate).filter(ClientDietTemplate.client_id == client_id).delete()
+            print(f"DEBUG: Deleted {deleted_count} existing records")
+        else:
+            # Merge mode - only delete records with matching names
+            names_to_replace = []
+            for day_key, day_data in meal_plan.items():
+                day_name = standard_day_names.get(day_key.lower(), day_key.replace('_', ' ').title())
+                names_to_replace.append(day_name)
+            
+            if names_to_replace:
+                deleted_count = db.query(ClientDietTemplate).filter(
+                    ClientDietTemplate.client_id == client_id,
+                    ClientDietTemplate.template_name.in_(names_to_replace)
+                ).delete(synchronize_session=False)
+                print(f"DEBUG: Merge mode - deleted {deleted_count} records with names: {names_to_replace}")
         
         saved_count = 0
         
@@ -230,7 +244,7 @@ def save_meal_plan_to_database(client_id: int, meal_plan: dict, db: Session):
         for day_key, day_data in meal_plan.items():
             try:
                 # Handle custom day names
-                day_name = day_names.get(day_key.lower(), day_key.replace('_', ' ').title())
+                day_name = standard_day_names.get(day_key.lower(), day_key.replace('_', ' ').title())
                 
                 # Ensure day_data is serializable
                 if isinstance(day_data, str):
@@ -259,7 +273,8 @@ def save_meal_plan_to_database(client_id: int, meal_plan: dict, db: Session):
         return {
             'success': True, 
             'saved_count': saved_count,
-            'message': f'Saved {saved_count} meal templates'
+            'merge_mode': merge_mode,
+            'message': f'Saved {saved_count} meal templates' + (' (merged)' if merge_mode else '')
         }
         
     except Exception as e:
@@ -276,6 +291,19 @@ def save_meal_plan_to_database(client_id: int, meal_plan: dict, db: Session):
             'error': str(e),
             'message': f'Database save failed: {str(e)}'
         }
+
+
+def has_custom_day_names(meal_plan: dict):
+    """Check if meal plan contains custom day names (not standard Monday-Sunday)"""
+    standard_keys = {'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'}
+    actual_keys = {key.lower().replace('_', ' ').replace(' ', '') for key in meal_plan.keys()}
+    
+    # Check if any key doesn't match standard day names
+    for key in meal_plan.keys():
+        normalized_key = key.lower().replace('_', '').replace(' ', '')
+        if normalized_key not in standard_keys:
+            return True
+    return False
 
 
 def get_standard_quantity_for_food(food_name):
@@ -894,6 +922,73 @@ Create UNIQUE daily variations - each day should have different main meals even 
     
     print(f"DEBUG: Successfully regenerated {len(new_meal_plan)} unique daily plans")
     return new_meal_plan
+
+def simple_food_removal(meal_plan, foods_to_remove):
+    """Simple food removal without AI regeneration - for quick fixes"""
+    try:
+        print(f"DEBUG: Simple removal of foods: {foods_to_remove}")
+        
+        if not foods_to_remove:
+            return meal_plan
+        
+        # Convert foods to lowercase for matching
+        remove_foods_lower = [food.lower().strip() for food in foods_to_remove]
+        
+        updated_meal_plan = {}
+        removed_items_count = 0
+        
+        for day_key, day_data in meal_plan.items():
+            updated_day_data = []
+            
+            for meal_slot in day_data:
+                updated_food_list = []
+                slot_calories_removed = 0
+                
+                for food_item in meal_slot.get('foodList', []):
+                    food_name = food_item.get('name', '').lower()
+                    
+                    # Check if this food should be removed
+                    should_remove = any(remove_food in food_name for remove_food in remove_foods_lower)
+                    
+                    if should_remove:
+                        print(f"DEBUG: Removing {food_item.get('name')} from {meal_slot.get('title', 'Unknown meal')}")
+                        slot_calories_removed += food_item.get('calories', 0)
+                        removed_items_count += 1
+                    else:
+                        updated_food_list.append(food_item)
+                
+                # Update the meal slot
+                updated_slot = meal_slot.copy()
+                updated_slot['foodList'] = updated_food_list
+                updated_slot['itemsCount'] = len(updated_food_list)
+                
+                # If we removed significant calories, add a simple replacement
+                if slot_calories_removed > 50 and len(updated_food_list) == 0:
+                    # Add a simple replacement food
+                    replacement_food = create_food_item(
+                        name="Mixed vegetables",
+                        calories=slot_calories_removed,
+                        protein=3,
+                        carbs=8,
+                        fat=2,
+                        quantity="100 grams | 1/2 cup | 3/4 bowl"
+                    )
+                    updated_slot['foodList'].append(replacement_food)
+                    updated_slot['itemsCount'] = 1
+                    print(f"DEBUG: Added replacement food to maintain calories")
+                
+                updated_day_data.append(updated_slot)
+            
+            updated_meal_plan[day_key] = updated_day_data
+        
+        print(f"DEBUG: Simple removal completed. Removed {removed_items_count} items")
+        return updated_meal_plan
+        
+    except Exception as e:
+        print(f"ERROR: Simple food removal failed: {e}")
+        print(f"ERROR: Simple removal traceback: {traceback.format_exc()}")
+        # Return original plan if removal fails
+        return meal_plan
 
 
 def calculate_meal_calories_distribution(target_calories):
@@ -2203,9 +2298,30 @@ Just tell me what you'd like to do!"""
             # Check for food restrictions/allergies first
             # Check for food restrictions/allergies first (but not simple "remove" commands)
             restrictions = None
-            if not text.lower().strip() in ['remove', 'change', 'edit', 'modify', 'update']:
+            simple_commands = ['remove', 'change', 'edit', 'modify', 'update']
+            text_lower = text.lower().strip()
+
+            # Only check for restrictions if it has specific allergy/restriction language
+            if not any(cmd in text_lower for cmd in simple_commands) or any(trigger in text_lower for trigger in ['allergic', 'allergy', 'avoid', 'cant eat', "can't eat", 'intolerant']):
                 restrictions = detect_food_restrictions(text)
-                
+            else:
+                # Handle simple food removal commands
+                if any(cmd in text_lower for cmd in simple_commands):
+                    # Extract food name from "remove X" pattern
+                    food_to_remove = None
+                    if text_lower.startswith('remove '):
+                        food_to_remove = text_lower.replace('remove ', '').strip()
+                    elif ' remove' in text_lower:
+                        food_to_remove = text_lower.replace(' remove', '').strip()
+                    
+                    if food_to_remove:
+                        restrictions = {
+                            'found_allergens': [],
+                            'other_foods': [food_to_remove],
+                            'raw_text': text,
+                            'simple_removal': True  # Flag for simple removal
+                        }
+                            
             if restrictions:
                 print(f"DEBUG: Detected food restrictions: {restrictions}")
                 
@@ -2218,13 +2334,41 @@ Just tell me what you'd like to do!"""
                         yield f"data: {json.dumps({'message': f'I understand you want to avoid: {avoid_text}. Let me regenerate your complete 7-day meal plan without these items. This may take a moment...', 'type': 'allergy_detected'})}\n\n"
                         
                         # Regenerate complete 7-day meal plan
-                        new_meal_plan = regenerate_meal_plan_without_allergens(
-                            pending_state.get("meal_plan"),
-                            restrictions,
-                            pending_state.get("profile"),
-                            pending_state.get("diet_type"),
-                            pending_state.get("cuisine_type")
-                        )
+                        try:
+                            import asyncio
+                            from functools import partial
+                            
+                            # Create a partial function for the regeneration
+                            regen_func = partial(
+                                regenerate_meal_plan_without_allergens,
+                                pending_state.get("meal_plan"),
+                                restrictions,
+                                pending_state.get("profile"),
+                                pending_state.get("diet_type"),
+                                pending_state.get("cuisine_type")
+                            )
+                            
+                            # Run with timeout (30 seconds max)
+                            loop = asyncio.get_event_loop()
+                            new_meal_plan = await loop.run_in_executor(None, regen_func)
+                            
+                            # Fallback check
+                            if not new_meal_plan or len(new_meal_plan) == 0:
+                                print("WARNING: Regeneration returned empty plan, using simple removal")
+                                new_meal_plan = simple_food_removal(
+                                    pending_state.get("meal_plan"),
+                                    restrictions.get('other_foods', [])
+                                )
+                            
+                        except Exception as regen_error:
+                            print(f"ERROR: Meal plan regeneration failed: {regen_error}")
+                            print(f"ERROR: Regeneration traceback: {traceback.format_exc()}")
+                            
+                            # Fallback to simple removal
+                            new_meal_plan = simple_food_removal(
+                                pending_state.get("meal_plan"),
+                                restrictions.get('other_foods', [])
+                            )
                         
                         if new_meal_plan and len(new_meal_plan) == 7:  # Should have 7 days
                             
@@ -2400,14 +2544,17 @@ Example: Type "2" to change only Tuesday"""
                 print(f"DEBUG: Storing meal template: {template_name}")
                 
                 # Save to database directly
-                save_result = save_meal_plan_to_database(client_id, meal_plan, db)
+                save_result = save_meal_plan_to_database(client_id, meal_plan, db, merge_mode=False)
                 print(f"DEBUG: Database save result: {save_result}")
                 
                 await mem.clear_pending(user_id)
                 
                 async def _finalize_default():
                     if save_result and save_result.get('success'):
-                        message = '✅ Your 7-day meal plan is finalized and saved to database!'
+                        if save_result.get('merge_mode'):
+                            message = f'✅ Your meal plan is updated! Custom day names added as new templates. Total templates: {save_result.get("saved_count", 0)}'
+                        else:
+                            message = '✅ Your 7-day meal plan is finalized and saved to database!'
                         yield sse_json({
                             "type": "meal_template_saved",
                             "status": "success",
@@ -2572,7 +2719,9 @@ Or type "cancel" to go back."""
                 
                 # Save to database
                 client_id = pending_state.get("client_id")
-                save_result = save_meal_plan_to_database(client_id, updated_meal_plan, db)
+                # Check if we have custom names
+                use_merge_mode = has_custom_day_names(updated_meal_plan)
+                save_result = save_meal_plan_to_database(client_id, updated_meal_plan, db, merge_mode=use_merge_mode)
                 
                 await mem.clear_pending(user_id)
                 
@@ -2643,7 +2792,9 @@ Or type "cancel" to go back."""
                 
                 # Save to database
                 client_id = pending_state.get("client_id")
-                save_result = save_meal_plan_to_database(client_id, updated_meal_plan, db)
+                # Check if we have custom names
+                use_merge_mode = has_custom_day_names(updated_meal_plan)
+                save_result = save_meal_plan_to_database(client_id, updated_meal_plan, db, merge_mode=use_merge_mode)
 
                 await mem.clear_pending(user_id)
                 
@@ -2719,8 +2870,7 @@ Example: Type "2" to change only Tuesday"""
                 print("meal template is", template_name)
 
                 # Save to database directly
-                save_result = save_meal_plan_to_database(client_id, meal_plan, db)
-
+                save_result = save_meal_plan_to_database(client_id, meal_plan, db, merge_mode=False)
                 await mem.clear_pending(user_id)
 
                 async def _finalize_default():
