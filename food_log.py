@@ -11,7 +11,7 @@ from app.models.deps import get_http, get_oai, get_mem
 from openai import OpenAI
 import google.generativeai as genai
 import json, re, os
-
+from app.models.fittbot_models import ActualDiet 
 
 from app.fittbot_api.v1.client.client_api.chatbot.chatbot_services.llm_helpers import (
     PlainTextStreamFilter, oai_chat_stream, GENERAL_SYSTEM, TOP_K,
@@ -649,6 +649,7 @@ def handle_quantity_question(food_name, unit=None):
 async def chat_stream(
     user_id: int,
     text: str = Query(None),
+    meal: str = Query(None),
     mem = Depends(get_mem),
     oai = Depends(get_oai),
     db: Session = Depends(get_db),
@@ -741,6 +742,11 @@ async def chat_stream(
                 
                 if logged_foods:
                     async def _final_logged():
+                        # Store to database
+                        today_date = datetime.now(IST).strftime("%Y-%m-%d")
+                        if meal:
+                            store_diet_data_to_db(db, user_id, today_date, logged_foods, meal)
+                        
                         response_data = create_food_log_response_with_message(logged_foods)
                         yield sse_json(response_data)
                         yield "event: ping\ndata: {}\n\n"
@@ -836,6 +842,11 @@ async def chat_stream(
                                 await mem.clear_pending(user_id)
                                 
                                 async def _final_log():
+                                    # Store to database
+                                    today_date = datetime.now(IST).strftime("%Y-%m-%d")
+                                    if meal:
+                                        store_diet_data_to_db(db, user_id, today_date, logged_foods, meal)
+                                    
                                     response_data = create_food_log_response_with_message(logged_foods)
                                     
                                     # Send only the complete food log data (includes the message)
@@ -920,6 +931,11 @@ async def chat_stream(
                         await mem.clear_pending(user_id)
                         
                         async def _logged_then_nav():
+                            # Store to database
+                            today_date = datetime.now(IST).strftime("%Y-%m-%d")
+                            if meal:
+                                store_diet_data_to_db(db, user_id, today_date, logged_foods, meal)
+                            
                             response_data = create_food_log_response_with_message(logged_foods)
                             
                             # Send only the complete food log data (includes the message)
@@ -1031,6 +1047,11 @@ async def chat_stream(
             print("DEBUG: All foods have quantities, logging immediately")
             
             async def _logged_then_nav():
+                # Store to database
+                today_date = datetime.now(IST).strftime("%Y-%m-%d")
+                if meal:
+                    store_diet_data_to_db(db, user_id, today_date, logged_foods, meal)
+                
                 response_data = create_food_log_response_with_message(logged_foods)
                 
                 # Send only the complete food log data (includes the message)
@@ -1150,6 +1171,185 @@ def is_liquid_food(food_name):
         'shake', 'lassi', 'soup', 'broth', 'wine', 'beer', 'soda'
     ]
     return any(keyword in food_lower for keyword in liquid_keywords)
+
+def is_liquid_food(food_name):
+    """Determine if a food is primarily liquid"""
+    food_lower = food_name.lower()
+    liquid_keywords = [
+        'juice', 'milk', 'water', 'tea', 'coffee', 'drink', 'smoothie', 
+        'shake', 'lassi', 'soup', 'broth', 'wine', 'beer', 'soda'
+    ]
+    return any(keyword in food_lower for keyword in liquid_keywords)
+
+# ADD THESE FUNCTIONS HERE (starting around line 634)
+def store_diet_data_to_db(db: Session, client_id: int, date: str, logged_foods: list, meal: str):
+    """Store logged food data in actual_diet table"""
+    try:
+        # Check if entry exists for this client and date
+        existing_entry = db.query(ActualDiet).filter(
+            ActualDiet.client_id == client_id,
+            ActualDiet.date == date
+        ).first()
+        
+        # Create the food item structure for the meal
+        food_items = []
+        for food in logged_foods:
+            food_item = {
+                "id": str(int(datetime.now().timestamp() * 1000)),  # Generate unique ID
+                "name": food.get('name', ''),
+                "quantity": f"{food.get('quantity', 0)} {food.get('unit', 'serving')}",
+                "calories": food.get('calories', 0),
+                "protein": food.get('protein', 0),
+                "carbs": food.get('carbs', 0),
+                "fat": food.get('fat', 0),
+                "fiber": food.get('fiber', 0),
+                "sugar": food.get('sugar', 0),
+                "image_url": ""
+            }
+            food_items.append(food_item)
+        
+        if existing_entry:
+            # Parse existing diet_data
+            diet_data = json.loads(existing_entry.diet_data) if existing_entry.diet_data else []
+            
+            # Find the meal category and update it
+            meal_found = False
+            for meal_category in diet_data:
+                if meal_category.get("title", "").lower() == meal.lower():
+                    # Append to existing foodList
+                    meal_category["foodList"].extend(food_items)
+                    meal_category["itemsCount"] = len(meal_category["foodList"])
+                    meal_found = True
+                    break
+            
+            if not meal_found:
+                # If meal category doesn't exist, this shouldn't happen with your predefined structure
+                # But we can handle it by finding the right meal from the template
+                default_structure = get_default_diet_structure()
+                for default_meal in default_structure:
+                    if default_meal.get("title", "").lower() == meal.lower():
+                        default_meal["foodList"] = food_items
+                        default_meal["itemsCount"] = len(food_items)
+                        diet_data.append(default_meal)
+                        break
+            
+            # Update existing record
+            existing_entry.diet_data = json.dumps(diet_data)
+            db.commit()
+            
+        else:
+            # Create new entry with full structure
+            diet_data = get_default_diet_structure()
+            
+            # Update the specific meal
+            for meal_category in diet_data:
+                if meal_category.get("title", "").lower() == meal.lower():
+                    meal_category["foodList"] = food_items
+                    meal_category["itemsCount"] = len(food_items)
+                    break
+            
+            # Create new record
+            new_entry = ActualDiet(
+                client_id=client_id,
+                date=date,
+                diet_data=json.dumps(diet_data)
+            )
+            db.add(new_entry)
+            db.commit()
+            
+        print(f"Successfully stored diet data for client {client_id}, date {date}, meal {meal}")
+        return True
+        
+    except Exception as e:
+        print(f"Error storing diet data: {e}")
+        db.rollback()
+        return False
+
+def get_default_diet_structure():
+    """Return the default diet structure as shown in your example"""
+    return [
+        {
+            "id": "1",
+            "title": "Pre workout",
+            "tagline": "Energy boost",
+            "foodList": [],
+            "timeRange": "6:30-7:00 AM",
+            "itemsCount": 0
+        },
+        {
+            "id": "2",
+            "title": "Post workout",
+            "tagline": "Recovery fuel",
+            "foodList": [],
+            "timeRange": "7:30-8:00 AM",
+            "itemsCount": 0
+        },
+        {
+            "id": "3",
+            "title": "Early morning Detox",
+            "tagline": "Early morning nutrition",
+            "foodList": [],
+            "timeRange": "5:30-6:00 AM",
+            "itemsCount": 0
+        },
+        {
+            "id": "4",
+            "title": "Pre-Breakfast / Pre-Meal Starter",
+            "tagline": "Pre-breakfast fuel",
+            "foodList": [],
+            "timeRange": "7:00-7:30 AM",
+            "itemsCount": 0
+        },
+        {
+            "id": "5",
+            "title": "Breakfast",
+            "tagline": "Start your day right",
+            "foodList": [],
+            "timeRange": "8:30-9:30 AM",
+            "itemsCount": 0
+        },
+        {
+            "id": "6",
+            "title": "Mid-Morning snack",
+            "tagline": "Healthy meal",
+            "foodList": [],
+            "timeRange": "10:00-11:00 AM",
+            "itemsCount": 0
+        },
+        {
+            "id": "7",
+            "title": "Lunch",
+            "tagline": "Nutritious midday meal",
+            "foodList": [],
+            "timeRange": "1:00-2:00 PM",
+            "itemsCount": 0
+        },
+        {
+            "id": "8",
+            "title": "Evening snack",
+            "tagline": "Healthy meal",
+            "foodList": [],
+            "timeRange": "4:00-5:00 PM",
+            "itemsCount": 0
+        },
+        {
+            "id": "9",
+            "title": "Dinner",
+            "tagline": "End your day well",
+            "foodList": [],
+            "timeRange": "7:30-8:30 PM",
+            "itemsCount": 0
+        },
+        {
+            "id": "10",
+            "title": "Bed time",
+            "tagline": "Rest well",
+            "foodList": [],
+            "timeRange": "9:30-10:00 PM",
+            "itemsCount": 0
+        }
+    ]
+
 
 def get_food_max_reasonable_serving(food_name, unit):
     """Get maximum reasonable serving size for different foods"""
