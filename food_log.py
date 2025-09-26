@@ -1204,17 +1204,18 @@ def store_diet_data_to_db(db: Session, client_id: int, date: str, logged_foods: 
                 "fat": food.get('fat', 0),
                 "fiber": food.get('fiber', 0),
                 "sugar": food.get('sugar', 0),
-                "image_url": ""
+                "image_url": ""  # Empty as requested
             }
             food_items.append(food_item)
         
         if existing_entry:
             # Parse existing diet_data
-            diet_data = json.loads(existing_entry.diet_data) if existing_entry.diet_data else []
+            diet_data = existing_entry.diet_data if existing_entry.diet_data else []
             
             # Find the meal category and update it
             meal_found = False
             for meal_category in diet_data:
+                print(meal_category.get("title", "").lower(), meal.lower())
                 if meal_category.get("title", "").lower() == meal.lower():
                     # Append to existing foodList
                     meal_category["foodList"].extend(food_items)
@@ -1232,9 +1233,10 @@ def store_diet_data_to_db(db: Session, client_id: int, date: str, logged_foods: 
                         default_meal["itemsCount"] = len(food_items)
                         diet_data.append(default_meal)
                         break
-            
+            from sqlalchemy.orm import attributes
+            attributes.flag_modified(existing_entry, "diet_data")
             # Update existing record
-            existing_entry.diet_data = json.dumps(diet_data)
+            existing_entry.diet_data = diet_data
             db.commit()
             
         else:
@@ -1243,6 +1245,7 @@ def store_diet_data_to_db(db: Session, client_id: int, date: str, logged_foods: 
             
             # Update the specific meal
             for meal_category in diet_data:
+                print(str(meal_category.get("title", "")).lower(), meal.lower())
                 if meal_category.get("title", "").lower() == meal.lower():
                     meal_category["foodList"] = food_items
                     meal_category["itemsCount"] = len(food_items)
@@ -1252,7 +1255,7 @@ def store_diet_data_to_db(db: Session, client_id: int, date: str, logged_foods: 
             new_entry = ActualDiet(
                 client_id=client_id,
                 date=date,
-                diet_data=json.dumps(diet_data)
+                diet_data=diet_data
             )
             db.add(new_entry)
             db.commit()
