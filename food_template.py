@@ -12,9 +12,11 @@ import openai
 from openai import OpenAI
 import json, re, os, random, uuid, traceback
 import httpx
+from fastapi import APIRouter, HTTPException, UploadFile, File, Query, Depends
 
 from app.models.fittbot_models import ClientDietTemplate
-
+from app.fittbot_api.v1.client.client_api.chatbot.chatbot_services.asr import transcribe_audio
+import orjson 
 
 from app.fittbot_api.v1.client.client_api.chatbot.chatbot_services.llm_helpers import (
    PlainTextStreamFilter, oai_chat_stream, GENERAL_SYSTEM, TOP_K,
@@ -54,6 +56,60 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 async def healthz():
    return {"ok": True, "env": APP_ENV, "tz": TZNAME}
 
+@router.post("/voice/transcribe")
+async def voice_transcribe(
+    audio: UploadFile = File(...),
+    http = Depends(get_http),
+    oai = Depends(get_oai),
+):
+    """Transcribe audio to text and translate to English"""
+    try:
+        # Import the transcribe function - adjust import path as needed
+        from app.fittbot_api.v1.client.client_api.chatbot.chatbot_services.llm_helpers import transcribe_audio
+        
+        transcript = await transcribe_audio(audio, http=http)
+        if not transcript:
+            raise HTTPException(400, "empty transcript")
+
+        def _translate_to_english(text: str) -> dict:
+            try:
+                sys = (
+                    "You are a translator. Output ONLY JSON like "
+                    "{\"lang\":\"xx\",\"english\":\"...\"} "
+                    "Detect source language code (ISO-639-1 if possible). "
+                    "Translate to natural English. Do not add extra words. "
+                    "Keep food names recognizable; use common transliterations if needed."
+                )
+                resp = oai.chat.completions.create(
+                    model=OPENAI_MODEL,
+                    messages=[{"role":"system","content":sys},{"role":"user","content":text}],
+                    response_format={"type":"json_object"},
+                    temperature=0
+                )
+                data = orjson.loads(resp.choices[0].message.content)
+                lang = (data.get("lang") or "unknown").strip()
+                eng = (data.get("english") or text).strip()
+                return {"lang": lang, "english": eng}
+            except Exception as e:
+                print(f"Translation error: {e}")
+                return {"lang":"unknown","english":text}
+
+        tinfo = _translate_to_english(transcript)
+        transcript_en = tinfo["english"]
+        lang_code = tinfo["lang"]
+
+        print(f"[voice] lang={lang_code} raw={transcript!r} | en={transcript_en!r}")
+
+        return {
+            "transcript": transcript_en,
+            "lang": lang_code,
+            "english": transcript_en,
+            "raw_transcript": transcript  # Include original for debugging
+        }
+        
+    except Exception as e:
+        print(f"Voice transcribe error: {e}")
+        raise HTTPException(500, f"Transcription failed: {str(e)}")
 
 def _fetch_profile(db: Session, client_id: int):
    """Fetch complete client profile including weight journey and calorie targets"""
@@ -207,10 +263,10 @@ def create_food_item(name, calories, protein, carbs, fat, quantity):
    }
 
 
-def save_meal_plan_to_database(client_id: int, meal_plan: dict, db: Session, merge_mode: bool = False):
-    """Save meal plan to database with optional merge mode for custom names"""
+def save_meal_plan_to_database(client_id: int, meal_plan: dict, db: Session, replace_all: bool = False):
+    """Save meal plan to database - only replaces templates with matching names"""
     try:
-        print(f"DEBUG: Starting database save for client {client_id}, merge_mode: {merge_mode}")
+        print(f"DEBUG: Starting database save for client {client_id}, replace_all: {replace_all}")
         print(f"DEBUG: Meal plan keys: {list(meal_plan.keys())}")
         
         # Standard day mapping
@@ -220,23 +276,26 @@ def save_meal_plan_to_database(client_id: int, meal_plan: dict, db: Session, mer
             'sunday': 'Sunday'
         }
         
-        if not merge_mode:
-            # Original behavior - delete all existing records
+        if replace_all:
+            # Full replacement - delete all existing records (only when explicitly requested)
             deleted_count = db.query(ClientDietTemplate).filter(ClientDietTemplate.client_id == client_id).delete()
-            print(f"DEBUG: Deleted {deleted_count} existing records")
+            print(f"DEBUG: Full replacement - deleted {deleted_count} existing records")
         else:
-            # Merge mode - only delete records with matching names
+            # Selective replacement - only delete records that will be replaced
             names_to_replace = []
-            for day_key, day_data in meal_plan.items():
+            for day_key in meal_plan.keys():
                 day_name = standard_day_names.get(day_key.lower(), day_key.replace('_', ' ').title())
                 names_to_replace.append(day_name)
-            
+
             if names_to_replace:
                 deleted_count = db.query(ClientDietTemplate).filter(
                     ClientDietTemplate.client_id == client_id,
                     ClientDietTemplate.template_name.in_(names_to_replace)
                 ).delete(synchronize_session=False)
-                print(f"DEBUG: Merge mode - deleted {deleted_count} records with names: {names_to_replace}")
+                print(f"DEBUG: Selective replacement - deleted {deleted_count} records with names: {names_to_replace}")
+            else:
+                deleted_count = 0
+                print(f"DEBUG: No names to replace, skipping deletion")
         
         saved_count = 0
         
@@ -273,8 +332,9 @@ def save_meal_plan_to_database(client_id: int, meal_plan: dict, db: Session, mer
         return {
             'success': True, 
             'saved_count': saved_count,
-            'merge_mode': merge_mode,
-            'message': f'Saved {saved_count} meal templates' + (' (merged)' if merge_mode else '')
+            'deleted_count': deleted_count,
+            'replace_all': replace_all,
+            'message': f'Saved {saved_count} meal templates (deleted {deleted_count} old ones)'
         }
         
     except Exception as e:
@@ -556,17 +616,39 @@ def format_meal_plan_for_user_display(meal_plan, diet_type, cuisine_type, target
         formatted_display["days"].append(day_display)
     
     return formatted_display
+def get_meal_emoji(meal_title):
+    """Get emoji for meal slot - mobile friendly"""
+    title_lower = meal_title.lower()
+    
+    if "early morning" in title_lower:
+        return "🌅"
+    elif "breakfast" in title_lower:
+        return "🍳"
+    elif "morning" in title_lower:
+        return "🥨"
+    elif "lunch" in title_lower:
+        return "🍽️"
+    elif "evening" in title_lower:
+        return "☕"
+    elif "dinner" in title_lower:
+        return "🌙"
+    else:
+        return "🍴"
 
 def create_user_friendly_meal_plan_message(meal_plan, diet_type, cuisine_type, target_calories):
     """Create a formatted text message showing the meal plan structure"""
     
     message_parts = []
-    message_parts.append(f"Your {diet_type.title()} {cuisine_type.replace('_', ' ').title()} Weekly Meal Plan")
-    message_parts.append(f"Target: {target_calories} calories per day\n")
+    message_parts.append("🍽️ YOUR MEAL PLAN")
+    message_parts.append(f"Diet: {diet_type.title()}")
+    message_parts.append(f"Style: {cuisine_type.replace('_', ' ').title()}")
+    message_parts.append(f"Daily Goal: {target_calories} cal")
+    message_parts.append("")
     
     for day_name, day_meals in meal_plan.items():
         day_display_name = day_name.replace('_', ' ').title()
-        message_parts.append(f"** {day_display_name} **")
+        message_parts.append(f"📅 {day_display_name.upper()}")
+        message_parts.append("─" * 18)
         
         day_total_calories = 0
         
@@ -576,7 +658,9 @@ def create_user_friendly_meal_plan_message(meal_plan, diet_type, cuisine_type, t
             foods = meal_slot.get("foodList", [])
             
             if foods:
-                message_parts.append(f"  {title} ({time_range})")
+                meal_emoji = get_meal_emoji(title)
+                message_parts.append(f"{meal_emoji} {title}")
+                message_parts.append(f"⏰ {time_range}")
                 
                 slot_calories = 0
                 for food in foods:
@@ -587,14 +671,14 @@ def create_user_friendly_meal_plan_message(meal_plan, diet_type, cuisine_type, t
                     carbs = food.get("carbs", 0)
                     fat = food.get("fat", 0)
                     
-                    message_parts.append(f"    • {name}")
-                    message_parts.append(f"      Qty: {quantity}")
-                    message_parts.append(f"      {calories}cal | {protein}g protein | {carbs}g carbs | {fat}g fat")
+                    message_parts.append(f"  • {name}")
+                    message_parts.append(f"    Qty: {quantity}")
+                    message_parts.append(f"    {calories}cal | {protein}g protein | {carbs}g carbs | {fat}g fat")
                     
                     slot_calories += calories
                 
-                message_parts.append(f"    Slot Total: {slot_calories} calories\n")
-                day_total_calories += slot_calories
+                message_parts.append(f"Total: {slot_calories} cal")
+                message_parts.append("")
         
         message_parts.append(f"  Day Total: {day_total_calories} calories")
         message_parts.append("=" * 50 + "\n")
@@ -2074,6 +2158,7 @@ async def chat_stream(
    user_id: int,
    client_id: int = Query(..., description="Client ID for whom to create meal plan"),
    text: str = Query(None),
+   audio_transcript: str = Query(None, description="Transcribed audio text"),
    mem = Depends(get_mem),
    oai = Depends(get_oai),
    db: Session = Depends(get_db),
@@ -2122,8 +2207,14 @@ I'll create a personalized 7-day meal template for you. First, are you vegetaria
                return StreamingResponse(_profile_error(), media_type="text/event-stream",
                                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
       
-       text = text.strip()
-       print(f"DEBUG: Processing text: '{text}'")
+       text = text.strip() if text else ""
+
+       # Handle voice input
+       if audio_transcript and not text:
+            text = audio_transcript.strip()
+            print(f"DEBUG: Using audio transcript: {text}")
+       elif audio_transcript and text:
+            print(f"DEBUG: Both text and audio provided, using text: {text}")
       
        # Get pending state from memory
        try:
@@ -2260,14 +2351,15 @@ Examples:
                         })
                         
                         # FIFTH: Show options message
-                        options_msg = f"""Your {diet_type} {cuisine_display} meal plan is ready!
+                        options_msg = f"""🎉 Your {diet_type.title()} meal plan is ready!
 
-🍽️ What would you like to do next?
+ What's next?
 
-✨ Edit Foods – If you don’t like any food or have an allergy, just say "remove" and I’ll add an alternate for you.
-or say nothing or "no" to finalize the plan.
+🔧 Edit foods: "remove dairy"
+📝 Rename days: "yes" 
+✅ Finalize: "no" or "done"
 
-Just tell me what you'd like to do!"""
+What would you like to do?"""
                         
                         yield f"data: {json.dumps({'message': options_msg, 'type': 'meal_plan_options'})}\n\n"
                         yield "event: done\ndata: [DONE]\n\n"
@@ -2544,7 +2636,7 @@ Example: Type "2" to change only Tuesday"""
                 print(f"DEBUG: Storing meal template: {template_name}")
                 
                 # Save to database directly
-                save_result = save_meal_plan_to_database(client_id, meal_plan, db, merge_mode=False)
+                save_result = save_meal_plan_to_database(client_id, meal_plan, db, replace_all=False)
                 print(f"DEBUG: Database save result: {save_result}")
                 
                 await mem.clear_pending(user_id)
@@ -2720,8 +2812,9 @@ Or type "cancel" to go back."""
                 # Save to database
                 client_id = pending_state.get("client_id")
                 # Check if we have custom names
-                use_merge_mode = has_custom_day_names(updated_meal_plan)
-                save_result = save_meal_plan_to_database(client_id, updated_meal_plan, db, merge_mode=use_merge_mode)
+                save_result = save_meal_plan_to_database(client_id, updated_meal_plan, db, replace_all=False)
+
+
                 
                 await mem.clear_pending(user_id)
                 
@@ -2793,8 +2886,7 @@ Or type "cancel" to go back."""
                 # Save to database
                 client_id = pending_state.get("client_id")
                 # Check if we have custom names
-                use_merge_mode = has_custom_day_names(updated_meal_plan)
-                save_result = save_meal_plan_to_database(client_id, updated_meal_plan, db, merge_mode=use_merge_mode)
+                save_result = save_meal_plan_to_database(client_id, updated_meal_plan, db, replace_all=False)
 
                 await mem.clear_pending(user_id)
                 
@@ -2870,7 +2962,7 @@ Example: Type "2" to change only Tuesday"""
                 print("meal template is", template_name)
 
                 # Save to database directly
-                save_result = save_meal_plan_to_database(client_id, meal_plan, db, merge_mode=False)
+                save_result = save_meal_plan_to_database(client_id, meal_plan, db, replace_all=False)
                 await mem.clear_pending(user_id)
 
                 async def _finalize_default():
