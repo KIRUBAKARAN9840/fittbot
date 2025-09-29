@@ -14,7 +14,7 @@ import json, re, os, random, uuid, traceback
 import httpx
 from fastapi import APIRouter, HTTPException, UploadFile, File, Query, Depends
 
-from app.models.fittbot_models import ClientDietTemplate
+from app.models.fittbot_models import ClientDietTemplate, MealTemplate
 from app.fittbot_api.v1.client.client_api.chatbot.chatbot_services.asr import transcribe_audio
 import orjson 
 
@@ -245,21 +245,19 @@ def get_food_image_url(food_name):
    return f"add_image{clean_name}.png"
 
 
-def create_food_item(name, calories, protein, carbs, fat, quantity):
-   
-
+def create_food_item(name, calories, protein, carbs, fat, quantity, fiber=0, sugar=0):
    """Create a food item in the required format with proper quantity"""
    return {
        "id": generate_food_id(),
        "fat": fat,
-       "pic": get_food_image_url(name),
-       "date": datetime.now().strftime("%Y-%m-%d"),
        "name": name,
        "carbs": carbs,
+       "fiber": fiber,
+       "sugar": sugar,
        "protein": protein,
        "calories": calories,
-       "quantity": quantity,  # Now accepts full quantity string with units
-       "timeAdded": ""  # Empty as requested
+       "quantity": quantity,
+       "image_url": ""
    }
 
 
@@ -305,18 +303,27 @@ def save_meal_plan_to_database(client_id: int, meal_plan: dict, db: Session, rep
                 # Handle custom day names
                 day_name = standard_day_names.get(day_key.lower(), day_key.replace('_', ' ').title())
                 
-                # Ensure day_data is serializable
+                # FIX: Store raw Python objects in JSON column, not JSON strings
                 if isinstance(day_data, str):
-                    diet_data_json = day_data
+                    # If it's a JSON string, parse it back to Python object
+                    try:
+                        diet_data_obj = json.loads(day_data)
+                        print(f"DEBUG: Parsed JSON string to Python object for day '{day_name}'")
+                    except json.JSONDecodeError:
+                        # If parsing fails, treat as plain text (shouldn't happen for meal plans)
+                        diet_data_obj = {"error": "Invalid JSON", "raw_data": day_data}
+                        print(f"DEBUG: Failed to parse JSON for day '{day_name}', storing as error object")
                 else:
-                    diet_data_json = json.dumps(day_data, ensure_ascii=False, indent=None)
-                
-                print(f"DEBUG: Saving day '{day_name}' (key: {day_key}) with {len(diet_data_json)} chars")
-                
+                    # If it's already a Python object, use directly
+                    diet_data_obj = day_data
+                    print(f"DEBUG: Using Python object directly for day '{day_name}'")
+
+                print(f"DEBUG: Saving day '{day_name}' (key: {day_key}) with Python object type: {type(diet_data_obj)}")
+
                 new_record = ClientDietTemplate(
                     client_id=client_id,
                     template_name=day_name,
-                    diet_data=diet_data_json
+                    diet_data=diet_data_obj
                 )
                 db.add(new_record)
                 saved_count += 1
@@ -1055,7 +1062,9 @@ def simple_food_removal(meal_plan, foods_to_remove):
                         protein=3,
                         carbs=8,
                         fat=2,
-                        quantity="100 grams | 1/2 cup | 3/4 bowl"
+                        quantity="100 grams | 1/2 cup | 3/4 bowl",
+                        fiber=3,
+                        sugar=5
                     )
                     updated_slot['foodList'].append(replacement_food)
                     updated_slot['itemsCount'] = 1
@@ -3046,7 +3055,18 @@ I'll create a personalized 7-day meal template for you. First, are you vegetaria
 
 
 
-
+def prepare_json_data_for_db(data):
+    """Prepare data for storing in JSON database column (returns Python object, not JSON string)"""
+    if isinstance(data, str):
+        # If it's a JSON string, parse it back to Python object for DB storage
+        try:
+            return json.loads(data)
+        except json.JSONDecodeError:
+            # If parsing fails, wrap in error object
+            return {"error": "Invalid JSON", "raw_data": data}
+    else:
+        # If it's already a Python object, return as-is
+        return data
 
 
 
@@ -3141,7 +3161,8 @@ async def get_saved_template(client_id: int, db: Session = Depends(get_db)):
         meal_plan = {}
         for template in templates:
             day_key = template.template_name.lower()
-            day_data = json.loads(template.diet_data)
+            # FIX: No need to json.loads() since diet_data is already a Python object from JSON column
+            day_data = template.diet_data
             meal_plan[day_key] = day_data
         
         return {"status": "success", "client_id": client_id, "meal_plan": meal_plan, "total_days": len(templates)}
@@ -3214,12 +3235,23 @@ async def structurize_and_save_meal_template(
         templates_created = 0
         for day_key, day_data in meal_plan.items():
             day_name = day_names.get(day_key.lower(), day_key.title())
-            diet_data_json = json.dumps(day_data)
             
+            # FIX: Store raw Python objects in JSON column, not JSON strings
+            if isinstance(day_data, str):
+                # If it's a JSON string, parse it back to Python object
+                try:
+                    diet_data_obj = json.loads(day_data)
+                except json.JSONDecodeError:
+                    # If parsing fails, treat as plain text
+                    diet_data_obj = {"error": "Invalid JSON", "raw_data": day_data}
+            else:
+                # If it's already a Python object, use directly
+                diet_data_obj = day_data
+
             new_template = ClientDietTemplate(
                 client_id=client_id,
                 template_name=day_name,
-                diet_data=diet_data_json
+                diet_data=diet_data_obj
             )
             db.add(new_template)
             templates_created += 1
@@ -3235,5 +3267,179 @@ async def structurize_and_save_meal_template(
         
     except Exception as e:
         print(f"ERROR: Structurize and save failed: {e}")
+        db.rollback()
+        return {"status": "error", "message": str(e)}
+
+
+# =============== NEW MEAL TEMPLATE ENDPOINTS ===============
+
+@router.post("/meal-templates")
+async def create_meal_template(request: dict, db: Session = Depends(get_db)):
+    """Create a new meal template with the specified format"""
+    try:
+        # Extract data from request
+        template_id = request.get("id", str(uuid.uuid4()))
+        title = request.get("title")
+        tagline = request.get("tagline", "")
+        time_range = request.get("timeRange", "")
+        food_list = request.get("foodList", [])
+        client_id = request.get("client_id")
+        is_public = request.get("is_public", True)
+
+        if not title or not food_list:
+            return {"status": "error", "message": "Title and foodList are required"}
+
+        # Calculate items count
+        items_count = len(food_list)
+
+        # Validate food items structure
+        for food_item in food_list:
+            required_fields = ["id", "name", "calories", "quantity"]
+            if not all(field in food_item for field in required_fields):
+                return {"status": "error", "message": f"Each food item must have: {required_fields}"}
+
+        # Create meal template
+        meal_template = MealTemplate(
+            id=template_id,
+            title=title,
+            tagline=tagline,
+            time_range=time_range,
+            items_count=items_count,
+            food_list=food_list,  # Store as Python object in JSON column
+            client_id=client_id,
+            is_public=is_public
+        )
+
+        db.add(meal_template)
+        db.commit()
+
+        return {
+            "status": "success",
+            "message": "Meal template created successfully",
+            "template_id": template_id
+        }
+
+    except Exception as e:
+        print(f"ERROR: Create meal template failed: {e}")
+        db.rollback()
+        return {"status": "error", "message": str(e)}
+
+
+@router.get("/meal-templates")
+async def get_meal_templates(
+    client_id: int = Query(None),
+    is_public: bool = Query(True),
+    db: Session = Depends(get_db)
+):
+    """Get meal templates with optional filtering"""
+    try:
+        query = db.query(MealTemplate)
+
+        if client_id is not None:
+            # Get templates for specific client or public templates
+            query = query.filter(
+                (MealTemplate.client_id == client_id) |
+                (MealTemplate.is_public == True)
+            )
+        elif is_public:
+            # Get only public templates
+            query = query.filter(MealTemplate.is_public == True)
+
+        templates = query.order_by(MealTemplate.created_at.desc()).all()
+
+        # Format response to match your desired structure
+        result = []
+        for template in templates:
+            result.append({
+                "id": template.id,
+                "title": template.title,
+                "tagline": template.tagline,
+                "foodList": template.food_list,  # Already a Python object from JSON column
+                "timeRange": template.time_range,
+                "itemsCount": template.items_count
+            })
+
+        return {
+            "status": "success",
+            "templates": result,
+            "total_count": len(result)
+        }
+
+    except Exception as e:
+        print(f"ERROR: Get meal templates failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@router.get("/meal-templates/{template_id}")
+async def get_meal_template_by_id(template_id: str, db: Session = Depends(get_db)):
+    """Get a specific meal template by ID"""
+    try:
+        template = db.query(MealTemplate).filter(MealTemplate.id == template_id).first()
+
+        if not template:
+            return {"status": "error", "message": "Template not found"}
+
+        result = {
+            "id": template.id,
+            "title": template.title,
+            "tagline": template.tagline,
+            "foodList": template.food_list,
+            "timeRange": template.time_range,
+            "itemsCount": template.items_count
+        }
+
+        return {"status": "success", "template": result}
+
+    except Exception as e:
+        print(f"ERROR: Get meal template failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@router.put("/meal-templates/{template_id}")
+async def update_meal_template(template_id: str, request: dict, db: Session = Depends(get_db)):
+    """Update an existing meal template"""
+    try:
+        template = db.query(MealTemplate).filter(MealTemplate.id == template_id).first()
+
+        if not template:
+            return {"status": "error", "message": "Template not found"}
+
+        # Update fields if provided
+        if "title" in request:
+            template.title = request["title"]
+        if "tagline" in request:
+            template.tagline = request["tagline"]
+        if "timeRange" in request:
+            template.time_range = request["timeRange"]
+        if "foodList" in request:
+            template.food_list = request["foodList"]
+            template.items_count = len(request["foodList"])
+
+        db.commit()
+
+        return {"status": "success", "message": "Template updated successfully"}
+
+    except Exception as e:
+        print(f"ERROR: Update meal template failed: {e}")
+        db.rollback()
+        return {"status": "error", "message": str(e)}
+
+
+@router.delete("/meal-templates/{template_id}")
+async def delete_meal_template(template_id: str, db: Session = Depends(get_db)):
+    """Delete a meal template"""
+    try:
+        template = db.query(MealTemplate).filter(MealTemplate.id == template_id).first()
+
+        if not template:
+            return {"status": "error", "message": "Template not found"}
+
+        db.delete(template)
+        db.commit()
+
+        return {"status": "success", "message": "Template deleted successfully"}
+
+    except Exception as e:
+        print(f"ERROR: Delete meal template failed: {e}")
         db.rollback()
         return {"status": "error", "message": str(e)}
