@@ -233,9 +233,17 @@ def get_meal_template():
    ]
 
 
+_food_id_counter = 0
+
 def generate_food_id():
-   """Generate a random food ID similar to the example format"""
-   return f"{random.randint(100, 999)}-{int(datetime.now().timestamp() * 1000)}-{random.random()}"
+   """Generate a unique food ID similar to the example format"""
+   global _food_id_counter
+   import time
+   # Create a unique ID using timestamp + counter + random number to ensure uniqueness
+   timestamp_ms = int(time.time() * 1000)
+   _food_id_counter += 1
+   random_suffix = random.randint(100, 999)
+   return str(timestamp_ms + _food_id_counter + random_suffix)
 
 
 def get_food_image_url(food_name):
@@ -687,7 +695,7 @@ def create_user_friendly_meal_plan_message(meal_plan, diet_type, cuisine_type, t
                 message_parts.append(f"Total: {slot_calories} cal")
                 message_parts.append("")
         
-        message_parts.append(f"  Day Total: {day_total_calories} calories")
+        # message_parts.append(f"  Day Total: {day_total_calories} calories")
         message_parts.append("=" * 50 + "\n")
     
     message_parts.append("You can edit any food item by telling me what you'd like to change!")
@@ -2296,14 +2304,14 @@ Examples:
             print("DEBUG: In awaiting_cuisine_preference state")
             
             cuisine_type = detect_cuisine_preference(text)
-            
+
             if cuisine_type:
                 print(f"DEBUG: Detected cuisine type: {cuisine_type}")
-                
+
                 # Generate meal plan with both diet and cuisine preferences
                 profile = pending_state.get("profile")
                 diet_type = pending_state.get("diet_type")
-                
+
                 async def _generate_plan():
                     try:
                         cuisine_display = cuisine_type.replace('_', ' ').title()
@@ -2322,25 +2330,21 @@ Examples:
                             yield "event: done\ndata: [DONE]\n\n"
                             return
                         
-                        # FIRST: Send the raw meal plan data (for backend processing)
+                        # Send consolidated meal plan data (combined raw + formatted)
+                        formatted_display = format_meal_plan_for_user_display(
+                            meal_plan, diet_type, cuisine_type, profile['target_calories']
+                        )
+
                         yield sse_json({
-                            "type": "meal_plan",
+                            "type": "meal_plan_complete",
                             "status": "created",
                             "diet_type": diet_type,
                             "cuisine_type": cuisine_display,
                             "total_calories_per_day": profile['target_calories'],
                             "goal": profile['weight_delta_text'],
-                            "meal_plan": meal_plan
-                        })
-                        
-                        # SECOND: Send the formatted display data for frontend
-                        formatted_display = format_meal_plan_for_user_display(
-                            meal_plan, diet_type, cuisine_type, profile['target_calories']
-                        )
-                        yield sse_json({
-                            "type": "meal_plan_formatted", 
-                            "status": "display_ready",
-                            "formatted_data": formatted_display
+                            "meal_plan": meal_plan,
+                            "formatted_data": formatted_display,
+                            "message": f"Created {diet_type} {cuisine_display} meal plan successfully!"
                         })
                         
                         # THIRD: Send user-friendly text message showing the meal plan
@@ -2380,6 +2384,24 @@ What would you like to do?"""
                         yield "event: done\ndata: [DONE]\n\n"
                 
                 return StreamingResponse(_generate_plan(), media_type="text/event-stream",
+                                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+            else:
+                # Handle unrecognized cuisine input - ask for clarification
+                print(f"DEBUG: Unrecognized cuisine input: '{text}'")
+
+                async def _ask_cuisine_again():
+                    cuisine_msg = """I didn't recognize that cuisine preference. Please choose from:
+
+• **North Indian** - Roti, dal, curry-based dishes
+• **South Indian** - Rice, sambar, coconut-based dishes
+• **Commonly Available** - Simple, everyday foods
+
+Please type one of: North Indian, South Indian, or Commonly Available"""
+
+                    yield f"data: {json.dumps({'message': cuisine_msg, 'type': 'cuisine_clarification'})}\n\n"
+                    yield "event: done\ndata: [DONE]\n\n"
+
+                return StreamingResponse(_ask_cuisine_again(), media_type="text/event-stream",
                                         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
        # Handle name change and allergy check
@@ -2484,26 +2506,22 @@ What would you like to do?"""
                                 "avoided_foods": avoid_items
                             })
                             
-                            # FIRST: Send updated raw meal plan data
-                            yield sse_json({
-                                "type": "meal_plan_updated",
-                                "status": "regenerated", 
-                                "diet_type": pending_state.get("diet_type"),
-                                "avoided_foods": avoid_items,
-                                "meal_plan": new_meal_plan
-                            })
-                            
-                            # SECOND: Send the formatted display data for frontend (THIS WAS MISSING!)
+                            # Send consolidated updated meal plan data
                             formatted_display = format_meal_plan_for_user_display(
-                                new_meal_plan, 
-                                pending_state.get("diet_type"), 
-                                pending_state.get("cuisine_type"), 
+                                new_meal_plan,
+                                pending_state.get("diet_type"),
+                                pending_state.get("cuisine_type"),
                                 pending_state.get("profile", {}).get('target_calories', 2000)
                             )
+
                             yield sse_json({
-                                "type": "meal_plan_formatted_updated", 
-                                "status": "display_ready",
-                                "formatted_data": formatted_display
+                                "type": "meal_plan_updated_complete",
+                                "status": "regenerated",
+                                "diet_type": pending_state.get("diet_type"),
+                                "avoided_foods": avoid_items,
+                                "meal_plan": new_meal_plan,
+                                "formatted_data": formatted_display,
+                                "message": f"Updated meal plan without {', '.join(avoid_items)} successfully!"
                             })
                             
                             # THIRD: Send user-friendly text message showing the updated meal plan
@@ -2656,34 +2674,46 @@ Example: Type "2" to change only Tuesday"""
                             message = f'✅ Your meal plan is updated! Custom day names added as new templates. Total templates: {save_result.get("saved_count", 0)}'
                         else:
                             message = '✅ Your 7-day meal plan is finalized and saved to database!'
-                        yield sse_json({
-                            "type": "meal_template_saved",
-                            "status": "success",
-                            "template_name": template_name,
-                            "client_id": client_id,
-                            "message": "Successfully saved to database"
-                        })
                     else:
                         message = '⚠️ Your 7-day meal plan is finalized but database save failed!'
-                        yield sse_json({
-                            "type": "meal_template_save_failed", 
-                            "status": "error",
-                            "template_name": template_name,
-                            "client_id": client_id,
-                            "error": save_result.get('error', 'Unknown error') if save_result else 'Save function failed'
-                        })
-                    
-                    yield f"data: {json.dumps({'message': message, 'type': 'finalized'})}\n\n"
+
                     yield sse_json({
                         "type": "meal_template",
                         "status": "stored" if (save_result and save_result.get('success')) else "error",
                         "template_name": template_name,
                         "meal_plan": meal_plan,
-                        "day_names": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+                        "day_names": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+                        "message": message
                     })
                     yield "event: done\ndata: [DONE]\n\n"
                 
                 return StreamingResponse(_finalize_default(), media_type="text/event-stream",
+                                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+            else:
+                # Handle unrecognized input in name change state
+                print(f"DEBUG: Unrecognized input in awaiting_name_change_or_edit state: '{text}'")
+
+                async def _clarify_options():
+                    msg = """I didn't understand that. Here are your options:
+
+🍽️ **Food Changes**: Say things like:
+• "I'm allergic to peanuts"
+• "Remove dairy from plan"
+• "I can't eat eggs"
+
+📝 **Day Names**: Say:
+• "yes" - to customize day names
+• "no" - to keep Monday-Sunday
+
+✅ **Finalize**: Say:
+• "done" or "finalize" to save your plan
+
+What would you like to do?"""
+
+                    yield f"data: {json.dumps({'message': msg, 'type': 'clarification'})}\n\n"
+                    yield "event: done\ndata: [DONE]\n\n"
+
+                return StreamingResponse(_clarify_options(), media_type="text/event-stream",
                                         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
         # Handle which days to change
@@ -2693,13 +2723,13 @@ Example: Type "2" to change only Tuesday"""
                 await mem.clear_pending(user_id)
                 
                 async def _cancel_changes():
-                    yield f"data: {json.dumps({'message': '✅ Your meal plan is finalized!', 'type': 'finalized'})}\n\n"
                     yield sse_json({
-                        "type": "meal_plan_final", 
+                        "type": "meal_plan_final",
                         "status": "completed",
                         "diet_type": pending_state.get("diet_type"),
                         "meal_plan": meal_plan,
-                        "day_names": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+                        "day_names": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+                        "message": "✅ Your meal plan is finalized!"
                     })
                     yield "event: done\ndata: [DONE]\n\n"
                 
@@ -2832,14 +2862,14 @@ Or type "cancel" to go back."""
                         message = f"Your meal plan is finalized with custom names and saved: {', '.join(custom_names)}!"
                     else:
                         message = f"Your meal plan is finalized with names: {', '.join(custom_names)}! (Save failed)"
-                    
-                    yield f"data: {json.dumps({'message': message, 'type': 'finalized'})}\n\n"
+
                     yield sse_json({
                         "type": "meal_plan_final",
                         "status": "completed",
                         "diet_type": pending_state.get("diet_type"),
                         "meal_plan": updated_meal_plan,
-                        "day_names": custom_names
+                        "day_names": custom_names,
+                        "message": message
                     })
                     yield "event: done\ndata: [DONE]\n\n"
                 
@@ -2904,13 +2934,14 @@ Or type "cancel" to go back."""
                         message = f"✅ Your meal plan is finalized with names: {', '.join(custom_names)} and saved!"
                     else:
                         message = f"✅ Your meal plan is finalized with names: {', '.join(custom_names)}! (Save failed)"
-                    yield f"data: {json.dumps({'message': message, 'type': 'finalized'})}\n\n"
+
                     yield sse_json({
                         "type": "meal_plan_final",
                         "status": "completed",
                         "diet_type": pending_state.get("diet_type"),
                         "meal_plan": updated_meal_plan,
-                        "day_names": custom_names
+                        "day_names": custom_names,
+                        "message": message
                     })
                     yield "event: done\ndata: [DONE]\n\n"
                 
@@ -2980,13 +3011,13 @@ Example: Type "2" to change only Tuesday"""
                     else:
                         message = "Your 7-day meal plan is finalized! (Save failed)"
 
-                    yield f"data: {json.dumps({'message': message, 'type': 'finalized'})}\n\n"
                     yield sse_json({
                         "type": "meal_plan_final",
                         "status": "completed",
                         "diet_type": pending_state.get("diet_type"),
                         "meal_plan": meal_plan,
-                        "day_names": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+                        "day_names": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+                        "message": message
                     })
                     yield "event: done\ndata: [DONE]\n\n"
 
@@ -3003,37 +3034,58 @@ Example: Type "2" to change only Tuesday"""
 
        # Handle case where no pending state exists but user is sending text (FIRST MESSAGE HANDLER)
        else:
-           print(f"DEBUG: No valid pending state found, treating as first message. Current state: {pending_state}")
-           
-           # Treat any first message as a greeting and show welcome
-           profile = _fetch_profile(db, client_id)
-           print(f"DEBUG: Client profile for first message: {profile}")
-           
-           async def _welcome_with_greeting():
-               # Acknowledge their greeting first
-               greeting_response = "Hello! Nice to meet you. I'm your meal template assistant."
-               yield f"data: {json.dumps({'message': greeting_response, 'type': 'greeting_response'})}\n\n"
-               
-               # Then show the welcome message with profile info
-               welcome_msg = f"""I can see your profile:
+           print(f"DEBUG: No valid pending state found. Current state: {pending_state}")
+
+           # Check if user is explicitly asking for a new template (very restrictive)
+           text_lower = text.lower().strip()
+           new_template_keywords = ['new template', 'create template', 'start new template', 'new meal plan', 'create meal plan', 'make template', 'generate template', 'meal template']
+           greeting_keywords = ['hi', 'hello', 'hey there', 'good morning', 'good afternoon', 'good evening']
+
+           # Only start new template if exact match or very specific keywords
+           explicit_request = any(keyword in text_lower for keyword in new_template_keywords)
+           is_greeting = text_lower in greeting_keywords or text_lower in ['hi', 'hello', 'hey']
+
+           if explicit_request or is_greeting:
+               print("DEBUG: User requesting new template or greeting, starting new session")
+               # Treat as first message and show welcome
+               profile = _fetch_profile(db, client_id)
+               print(f"DEBUG: Client profile for first message: {profile}")
+
+               async def _welcome_with_greeting():
+                   # Acknowledge their greeting first
+                   greeting_response = "Hello! Nice to meet you. I'm your meal template assistant."
+                   yield f"data: {json.dumps({'message': greeting_response, 'type': 'greeting_response'})}\n\n"
+
+                   # Then show the welcome message with profile info
+                   welcome_msg = f"""I can see your profile:
 • Current Weight: {profile['current_weight']} kg
-• Target Weight: {profile['target_weight']} kg 
+• Target Weight: {profile['target_weight']} kg
 • Goal: {profile['weight_delta_text']}
 • Daily Calorie Target: {profile['target_calories']} calories
 
 I'll create a personalized 7-day meal template for you. First, are you vegetarian or non-vegetarian or eggetarian or vegan or ketogenic or paleo or jain?"""
-               
-               await mem.set_pending(user_id, {
-                   "state": "awaiting_diet_preference",
-                   "client_id": client_id,
-                   "profile": profile
-               })
-               
-               yield f"data: {json.dumps({'message': welcome_msg, 'type': 'welcome'})}\n\n"
-               yield "event: done\ndata: [DONE]\n\n"
-           
-           return StreamingResponse(_welcome_with_greeting(), media_type="text/event-stream",
-                                   headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+                   await mem.set_pending(user_id, {
+                       "state": "awaiting_diet_preference",
+                       "client_id": client_id,
+                       "profile": profile
+                   })
+
+                   yield f"data: {json.dumps({'message': welcome_msg, 'type': 'welcome'})}\n\n"
+                   yield "event: done\ndata: [DONE]\n\n"
+
+               return StreamingResponse(_welcome_with_greeting(), media_type="text/event-stream",
+                                       headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+           else:
+               # User sent a message but doesn't want to create a new template
+               print("DEBUG: User message doesn't request new template, providing help")
+               async def _provide_help():
+                   help_message = "Hi! I'm your meal template assistant. To create a new meal template, please say 'create new template' or 'new meal plan'. Otherwise, I can help you with existing templates."
+                   yield f"data: {json.dumps({'message': help_message, 'type': 'help'})}\n\n"
+                   yield "event: done\ndata: [DONE]\n\n"
+
+               return StreamingResponse(_provide_help(), media_type="text/event-stream",
+                                       headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
   
    except Exception as e:
        print(f"Critical error in chat_stream: {e}")
