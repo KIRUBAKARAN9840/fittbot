@@ -1,5 +1,5 @@
 #food_log
-from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi import APIRouter, HTTPException, Query, Depends, UploadFile, File
 from fastapi.responses import StreamingResponse
 from fastapi_limiter.depends import RateLimiter
 from pydantic import BaseModel
@@ -11,7 +11,8 @@ from app.models.deps import get_http, get_oai, get_mem
 from openai import OpenAI
 import google.generativeai as genai
 import json, re, os
-from app.models.fittbot_models import ActualDiet 
+from app.models.fittbot_models import ActualDiet
+from app.fittbot_api.v1.client.client_api.chatbot.chatbot_services.asr import transcribe_audio
 
 from app.fittbot_api.v1.client.client_api.chatbot.chatbot_services.llm_helpers import (
     PlainTextStreamFilter, oai_chat_stream, GENERAL_SYSTEM, TOP_K,
@@ -46,6 +47,67 @@ gemini_model = genai.GenerativeModel("gemini-1.5-flash")
 @router.get("/healthz")
 async def healthz():
     return {"ok": True, "env": APP_ENV, "tz": TZNAME}
+
+@router.post("/voice/transcribe")
+async def voice_transcribe(
+    audio: UploadFile = File(...),
+    http = Depends(get_http),
+    oai = Depends(get_oai),
+):
+    """Transcribe audio to text and translate to English"""
+    transcript = await transcribe_audio(audio, http=http)
+    if not transcript:
+        raise HTTPException(400, "empty transcript")
+
+    def _translate_to_english(text: str) -> dict:
+        try:
+            sys = (
+                "You are a translator. Output ONLY JSON like "
+                "{\"lang\":\"xx\",\"english\":\"...\"}. "
+                "Detect source language code (ISO-639-1 if possible). "
+                "Translate to natural English. Do not add extra words. "
+                "Keep food names recognizable; use common transliterations if needed."
+            )
+            resp = oai.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[{"role":"system","content":sys},{"role":"user","content":text}],
+                response_format={"type":"json_object"},
+                temperature=0
+            )
+            return orjson.loads(resp.choices[0].message.content)
+        except Exception as e:
+            print(f"Translation error: {e}")
+            return {"lang": "unknown", "english": text}
+
+    result = _translate_to_english(transcript)
+    return {
+        "transcript": transcript,
+        "detected_language": result.get("lang", "unknown"),
+        "english_text": result.get("english", transcript)
+    }
+
+@router.post("/voice/stream")
+async def voice_stream_sse(
+    user_id: int,
+    audio: UploadFile = File(...),
+    mem = Depends(get_mem),
+    oai = Depends(get_oai),
+    http = Depends(get_http),
+    db: Session = Depends(get_db),
+):
+    """Transcribe audio and process it through the food log stream"""
+    transcript = await transcribe_audio(audio, http=http)
+    if not transcript:
+        raise HTTPException(400, "empty transcript")
+
+    # Use the existing food log stream function with the transcript
+    return await chat_stream(
+        user_id=user_id,
+        text=transcript,
+        mem=mem,
+        oai=oai,
+        db=db
+    )
 
 def get_smart_unit_and_question(food_name):
     """
