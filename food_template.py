@@ -64,8 +64,7 @@ async def voice_transcribe(
 ):
     """Transcribe audio to text and translate to English"""
     try:
-        # Import the transcribe function - adjust import path as needed
-        from app.fittbot_api.v1.client.client_api.chatbot.chatbot_services.llm_helpers import transcribe_audio
+        # Use the transcribe function that's already imported from asr.py
         
         transcript = await transcribe_audio(audio, http=http)
         if not transcript:
