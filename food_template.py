@@ -3148,28 +3148,15 @@ Example: Type "2" to change only Tuesday"""
        else:
            print(f"DEBUG: No valid pending state found. Current state: {pending_state}")
 
-           # Check if user is explicitly asking for a new template (very restrictive)
-           text_lower = text.lower().strip()
-           new_template_keywords = ['new template', 'create template', 'start new template', 'new meal plan', 'create meal plan', 'make template', 'generate template', 'meal template']
-           greeting_keywords = ['hi', 'hello', 'hey there', 'good morning', 'good afternoon', 'good evening']
+           # Automatically start new template creation for any message
+           print("DEBUG: Starting new template creation session")
+           # Treat as first message and show welcome
+           profile = _fetch_profile(db, client_id)
+           print(f"DEBUG: Client profile for first message: {profile}")
 
-           # Only start new template if exact match or very specific keywords
-           explicit_request = any(keyword in text_lower for keyword in new_template_keywords)
-           is_greeting = text_lower in greeting_keywords or text_lower in ['hi', 'hello', 'hey']
-
-           if explicit_request or is_greeting:
-               print("DEBUG: User requesting new template or greeting, starting new session")
-               # Treat as first message and show welcome
-               profile = _fetch_profile(db, client_id)
-               print(f"DEBUG: Client profile for first message: {profile}")
-
-               async def _welcome_with_greeting():
-                   # Acknowledge their greeting first
-                   greeting_response = "Hello! Nice to meet you. I'm your meal template assistant."
-                   yield f"data: {json.dumps({'message': greeting_response, 'type': 'greeting_response'})}\n\n"
-
-                   # Then show the welcome message with profile info
-                   welcome_msg = f"""I can see your profile:
+           async def _welcome_with_greeting():
+               # Then show the welcome message with profile info
+               welcome_msg = f"""I can see your profile:
 • Current Weight: {profile['current_weight']} kg
 • Target Weight: {profile['target_weight']} kg
 • Goal: {profile['weight_delta_text']}
@@ -3177,27 +3164,17 @@ Example: Type "2" to change only Tuesday"""
 
 I'll create a personalized 7-day meal template for you. First, are you vegetarian or non-vegetarian or eggetarian or vegan or ketogenic or paleo or jain?"""
 
-                   await mem.set_pending(user_id, {
-                       "state": "awaiting_diet_preference",
-                       "client_id": client_id,
-                       "profile": profile
-                   })
+               await mem.set_pending(user_id, {
+                   "state": "awaiting_diet_preference",
+                   "client_id": client_id,
+                   "profile": profile
+               })
 
-                   yield f"data: {json.dumps({'message': welcome_msg, 'type': 'welcome'})}\n\n"
-                   yield "event: done\ndata: [DONE]\n\n"
+               yield f"data: {json.dumps({'message': welcome_msg, 'type': 'welcome'})}\n\n"
+               yield "event: done\ndata: [DONE]\n\n"
 
-               return StreamingResponse(_welcome_with_greeting(), media_type="text/event-stream",
-                                       headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-           else:
-               # User sent a message but doesn't want to create a new template
-               print("DEBUG: User message doesn't request new template, providing help")
-               async def _provide_help():
-                   help_message = "Hi! I'm your meal template assistant. To create a new meal template, please say 'create new template' or 'new meal plan'. Otherwise, I can help you with existing templates."
-                   yield f"data: {json.dumps({'message': help_message, 'type': 'help'})}\n\n"
-                   yield "event: done\ndata: [DONE]\n\n"
-
-               return StreamingResponse(_provide_help(), media_type="text/event-stream",
-                                       headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+           return StreamingResponse(_welcome_with_greeting(), media_type="text/event-stream",
+                                   headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
   
    except Exception as e:
        print(f"Critical error in chat_stream: {e}")
@@ -3284,6 +3261,32 @@ async def delete_chat(
        return {"status": "deleted", "user_id": req.user_id, "keys_deleted": deleted}
    except Exception as e:
        print(f"Error deleting chat for user {req.user_id}: {e}")
+       return {"status": "error", "user_id": req.user_id, "error": str(e)}
+
+
+@router.post("/exit_chat")
+async def exit_chat(
+   req: UserId,
+   mem = Depends(get_mem),
+):
+   """Called when user exits the chatbot - clears conversation state"""
+   try:
+       print(f"User {req.user_id} exiting food template chatbot - clearing state")
+
+       # Clear pending state
+       await mem.clear_pending(req.user_id)
+
+       # Optionally clear chat history too
+       history_key = f"template_chat:{req.user_id}:history"
+       await mem.r.delete(history_key)
+
+       return {
+           "status": "success",
+           "user_id": req.user_id,
+           "message": "Chat state cleared successfully"
+       }
+   except Exception as e:
+       print(f"Error clearing chat state for user {req.user_id}: {e}")
        return {"status": "error", "user_id": req.user_id, "error": str(e)}
 
 
