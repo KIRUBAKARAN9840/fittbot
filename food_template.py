@@ -26,6 +26,21 @@ from app.fittbot_api.v1.client.client_api.chatbot.chatbot_services.llm_helpers i
    explicit_log_command, STYLE_PLAN, is_plan_request,STYLE_CHAT_FORMAT,pretty_plan
 )
 
+def sse_data(content: str) -> str:
+    """
+    Properly format content for SSE transmission with UTF-8 Unicode support.
+    SSE requires 'data: ' prefix and double newline. Content is sent as plain UTF-8.
+    """
+    if isinstance(content, bytes):
+        content = content.decode('utf-8', errors='replace')
+
+    lines = content.split('\n')
+    if len(lines) == 1:
+        return f"data: {content}\n\n"
+    else:
+        return ''.join(f"data: {line}\n" for line in lines) + "\n"
+
+
 def ensure_db_session(db: Session):
     """Ensure database session is active"""
     try:
@@ -649,9 +664,53 @@ def get_meal_emoji(meal_title):
     else:
         return "🍴"
 
+def format_single_day_for_streaming(day_name, day_meals):
+    """Format a single day's meal plan for streaming (appends to existing message)"""
+
+    message_parts = []
+    day_display_name = day_name.replace('_', ' ').title()
+    message_parts.append(f"📅 {day_display_name.upper()}")
+    message_parts.append("─" * 30)
+
+    day_total_calories = 0
+
+    for meal_slot in day_meals:
+        title = meal_slot.get("title", "")
+        time_range = meal_slot.get("timeRange", "")
+        foods = meal_slot.get("foodList", [])
+
+        if foods:
+            meal_emoji = get_meal_emoji(title)
+            message_parts.append(f"\n{meal_emoji} {title}")
+            message_parts.append(f"⏰ {time_range}")
+
+            slot_calories = 0
+            for food in foods:
+                name = food.get("name", "")
+                quantity = food.get("quantity", "")
+                calories = food.get("calories", 0)
+                protein = food.get("protein", 0)
+                carbs = food.get("carbs", 0)
+                fat = food.get("fat", 0)
+
+                message_parts.append(f"  • {name}")
+                message_parts.append(f"    Qty: {quantity}")
+                message_parts.append(f"    {calories}cal | {protein}g protein | {carbs}g carbs | {fat}g fat")
+
+                slot_calories += calories
+                day_total_calories += calories
+
+            message_parts.append(f"Total: {slot_calories} cal")
+
+    message_parts.append(f"\n  Day Total: {day_total_calories} calories")
+    message_parts.append("=" * 50 + "\n")
+
+    return "\n".join(message_parts)
+
+
 def create_user_friendly_meal_plan_message(meal_plan, diet_type, cuisine_type, target_calories):
     """Create a formatted text message showing the meal plan structure"""
-    
+
     message_parts = []
     message_parts.append("🍽️ YOUR MEAL PLAN")
     message_parts.append(f"Diet: {diet_type.title()}")
@@ -1579,8 +1638,15 @@ def extract_main_meals(meal_data):
    return main_meals
 
 
-def generate_7_day_meal_plan(profile, diet_type, cuisine_type):
-   """Generate complete 7-day meal plan with variety tracking and cuisine preference"""
+def generate_7_day_meal_plan(profile, diet_type, cuisine_type, progress_callback=None):
+   """Generate complete 7-day meal plan with variety tracking and cuisine preference
+
+   Args:
+       profile: User profile dict
+       diet_type: Diet type string
+       cuisine_type: Cuisine preference string
+       progress_callback: Optional callable to report progress (day_name, day_number, total_days)
+   """
    days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
    meal_plan = {}
    previous_meals = {
@@ -1588,20 +1654,25 @@ def generate_7_day_meal_plan(profile, diet_type, cuisine_type):
        'lunches': [],
        'dinners': []
    }
-  
-   for day in days:
+
+   for day_index, day in enumerate(days):
        print(f"DEBUG: Generating {cuisine_type} {diet_type} meal plan for {day}")
+
+       # Report progress if callback provided
+       if progress_callback:
+           progress_callback(day, day_index + 1, len(days))
+
        try:
            meal_data = generate_meal_plan_with_ai(profile, diet_type, cuisine_type, day, previous_meals)
            template = convert_ai_meal_to_template(meal_data)
            meal_plan[day.lower()] = template
-          
+
            # Extract and track main meals for next day's variety
            day_meals = extract_main_meals(meal_data)
            previous_meals['breakfasts'].extend(day_meals['breakfasts'])
            previous_meals['lunches'].extend(day_meals['lunches'])
            previous_meals['dinners'].extend(day_meals['dinners'])
-          
+
            # Keep only last 3 days of meals to allow some repetition after gap
            if len(previous_meals['breakfasts']) > 9:  # 3 days * ~3 items
                previous_meals['breakfasts'] = previous_meals['breakfasts'][-9:]
@@ -1609,20 +1680,20 @@ def generate_7_day_meal_plan(profile, diet_type, cuisine_type):
                previous_meals['lunches'] = previous_meals['lunches'][-9:]
            if len(previous_meals['dinners']) > 9:
                previous_meals['dinners'] = previous_meals['dinners'][-9:]
-              
+
        except Exception as e:
            print(f"Error generating meal plan for {day}: {e}")
            # Use fallback for this day
            fallback_data = create_fallback_meal_plan(day, diet_type, cuisine_type, profile, previous_meals)
            template = convert_ai_meal_to_template(fallback_data)
            meal_plan[day.lower()] = template
-          
+
            # Track fallback meals too
            day_meals = extract_main_meals(fallback_data)
            previous_meals['breakfasts'].extend(day_meals['breakfasts'])
            previous_meals['lunches'].extend(day_meals['lunches'])
            previous_meals['dinners'].extend(day_meals['dinners'])
-  
+
    return meal_plan
 
 
@@ -2314,26 +2385,73 @@ Examples:
                 async def _generate_plan():
                     try:
                         cuisine_display = cuisine_type.replace('_', ' ').title()
-                        yield f"data: {json.dumps({'message': f'Perfect! Creating a {diet_type} {cuisine_display} 7-day meal plan for you...', 'type': 'progress'})}\n\n"
-                        
+
+                        # Start with header - stream as plain text
+                        header = f"""🍽️ YOUR MEAL PLAN
+Diet: {diet_type.title()}
+Style: {cuisine_display}
+Daily Goal: {profile['target_calories']} cal
+
+"""
+                        yield sse_data(header)
+
                         print(f"DEBUG: Starting meal plan generation with diet_type={diet_type}, cuisine_type={cuisine_type}")
-                        
-                        meal_plan = generate_7_day_meal_plan(profile, diet_type, cuisine_type)
-                        
+
+                        days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+                        meal_plan = {}
+                        previous_meals = {'breakfasts': [], 'lunches': [], 'dinners': []}
+
+                        for day_index, day in enumerate(days):
+                            try:
+                                meal_data = generate_meal_plan_with_ai(profile, diet_type, cuisine_type, day, previous_meals)
+                                template = convert_ai_meal_to_template(meal_data)
+                                meal_plan[day.lower()] = template
+
+                                # Format and stream this day's content immediately as plain text
+                                day_content = format_single_day_for_streaming(day, template)
+                                yield sse_data(day_content)
+
+                                # Extract and track main meals for next day's variety
+                                day_meals = extract_main_meals(meal_data)
+                                previous_meals['breakfasts'].extend(day_meals['breakfasts'])
+                                previous_meals['lunches'].extend(day_meals['lunches'])
+                                previous_meals['dinners'].extend(day_meals['dinners'])
+
+                                # Keep only last 3 days of meals
+                                if len(previous_meals['breakfasts']) > 9:
+                                    previous_meals['breakfasts'] = previous_meals['breakfasts'][-9:]
+                                if len(previous_meals['lunches']) > 9:
+                                    previous_meals['lunches'] = previous_meals['lunches'][-9:]
+                                if len(previous_meals['dinners']) > 9:
+                                    previous_meals['dinners'] = previous_meals['dinners'][-9:]
+
+                            except Exception as e:
+                                print(f"Error generating meal plan for {day}: {e}")
+                                # Use fallback for this day
+                                fallback_data = create_fallback_meal_plan(day, diet_type, cuisine_type, profile, previous_meals)
+                                template = convert_ai_meal_to_template(fallback_data)
+                                meal_plan[day.lower()] = template
+
+                                # Stream the fallback day's content as plain text
+                                day_content = format_single_day_for_streaming(day, template)
+                                yield sse_data(day_content)
+
+                                # Track fallback meals too
+                                day_meals = extract_main_meals(fallback_data)
+                                previous_meals['breakfasts'].extend(day_meals['breakfasts'])
+                                previous_meals['lunches'].extend(day_meals['lunches'])
+                                previous_meals['dinners'].extend(day_meals['dinners'])
+
                         print(f"DEBUG: Generated meal plan with {len(meal_plan)} days")
-                        
+
                         # Validate meal plan has content
                         if not meal_plan or len(meal_plan) == 0:
                             print("ERROR: Empty meal plan generated")
-                            yield f"data: {json.dumps({'message': 'Sorry, I encountered an issue generating your meal plan. Please try again.', 'type': 'error'})}\n\n"
+                            yield sse_data('Sorry, I encountered an issue generating your meal plan. Please try again.')
                             yield "event: done\ndata: [DONE]\n\n"
                             return
-                        
-                        # Send consolidated meal plan data (combined raw + formatted)
-                        formatted_display = format_meal_plan_for_user_display(
-                            meal_plan, diet_type, cuisine_type, profile['target_calories']
-                        )
 
+                        # Send consolidated meal plan data (for backend storage)
                         yield sse_json({
                             "type": "meal_plan_complete",
                             "status": "created",
@@ -2342,17 +2460,10 @@ Examples:
                             "total_calories_per_day": profile['target_calories'],
                             "goal": profile['weight_delta_text'],
                             "meal_plan": meal_plan,
-                            "formatted_data": formatted_display,
                             "message": f"Created {diet_type} {cuisine_display} meal plan successfully!"
                         })
-                        
-                        # THIRD: Send user-friendly text message showing the meal plan
-                        user_message = create_user_friendly_meal_plan_message(
-                            meal_plan, diet_type, cuisine_type, profile['target_calories']
-                        )
-                        yield f"data: {json.dumps({'message': user_message, 'type': 'meal_plan_preview'})}\n\n"
-                        
-                        # FOURTH: Set pending state and ask about customization
+
+                        # Set pending state and ask about customization
                         await mem.set_pending(user_id, {
                             "state": "awaiting_name_change_or_edit",
                             "client_id": pending_state.get("client_id"),
@@ -2361,25 +2472,27 @@ Examples:
                             "cuisine_type": cuisine_type,
                             "meal_plan": meal_plan
                         })
-                        
-                        # FIFTH: Show options message
-                        options_msg = f"""🎉 Your {diet_type.title()} meal plan is ready!
+
+                        # Show options message as plain text
+                        options_msg = f"""
+
+🎉 Your {diet_type.title()} meal plan is ready!
 
  What's next?
 
 🔧 Edit foods: "remove dairy"
-📝 Rename days: "yes" 
+📝 Rename days: "yes"
 ✅ Finalize: "no" or "done"
 
 What would you like to do?"""
-                        
-                        yield f"data: {json.dumps({'message': options_msg, 'type': 'meal_plan_options'})}\n\n"
+
+                        yield sse_data(options_msg)
                         yield "event: done\ndata: [DONE]\n\n"
-                        
+
                     except Exception as e:
                         print(f"Error generating meal plan: {e}")
                         print(f"Meal generation full traceback: {traceback.format_exc()}")
-                        yield f"data: {json.dumps({'message': 'Sorry, there was an error creating your meal plan. Please try again or contact support.', 'type': 'error'})}\n\n"
+                        yield sse_data('Sorry, there was an error creating your meal plan. Please try again or contact support.')
                         yield "event: done\ndata: [DONE]\n\n"
                 
                 return StreamingResponse(_generate_plan(), media_type="text/event-stream",
