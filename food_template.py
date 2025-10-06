@@ -2323,9 +2323,9 @@ What would you like to do?"""
                 async def _ask_cuisine_again():
                     cuisine_msg = """I didn't recognize that cuisine preference. Please choose from:
 
-• **North Indian** - Roti, dal, curry-based dishes
-• **South Indian** - Rice, sambar, coconut-based dishes
-• **Commonly Available** - Simple, everyday foods
+• North Indian - Roti, dal, curry-based dishes
+• South Indian - Rice, sambar, coconut-based dishes
+• Commonly Available - Simple, everyday foods
 
 Please type one of: North Indian, South Indian, or Commonly Available"""
 
@@ -2554,18 +2554,17 @@ Please type one of: North Indian, South Indian, or Commonly Available"""
             # Handle regular yes/no for name change
             elif is_yes(text):
                 async def _ask_which_days():
-                    msg = """You can customize day names individually. Current names are:
+                    msg = """📅 Rename days:  
+1️⃣ Mon  2️⃣ Tue  3️⃣ Wed  4️⃣ Thu  
+5️⃣ Fri  6️⃣ Sat  7️⃣ Sun
 
-1. Monday    2. Tuesday    3. Wednesday    4. Thursday
-5. Friday    6. Saturday   7. Sunday
+✏️ Type:  
+- One: "3"  
+- Many: "1,3,5"  
+- All: "all"  
+- Cancel: "cancel"  
+💡 Ex: "2" → rename Tue"""
 
-Which day(s) would you like to rename? You can:
-- Type a number (1-7) to change one day: "3"
-- Type multiple numbers: "1, 3, 5" 
-- Type "all" to change all days
-- Type "cancel" to keep current names
-
-Example: Type "2" to change only Tuesday"""
                     
                     await mem.set_pending(user_id, {
                         "state": "awaiting_day_selection",
