@@ -41,19 +41,6 @@ def sse_data(content: str) -> str:
         return ''.join(f"data: {line}\n" for line in lines) + "\n"
 
 
-def ensure_db_session(db: Session):
-    """Ensure database session is active"""
-    try:
-        # Test the connection
-        db.execute("SELECT 1")
-        return True
-    except Exception as e:
-        print(f"Database session error: {e}")
-        return False
-
-
-
-
 router = APIRouter(prefix="/food_template", tags=["food_template"])
 
 
@@ -1213,69 +1200,6 @@ def validate_and_adjust_calories(meal_data, target_calories, max_attempts=3):
    return meal_data
 
 
-def calculate_meal_calories_distribution(target_calories):
-   """Calculate calorie distribution across meal slots"""
-   distributions = {
-       "1": 0.02,  # Early Morning Detox - 2%
-       "2": 0.05,  # Pre-Breakfast Starter - 5%
-       "3": 0.25,  # Breakfast - 25%
-       "4": 0.10,  # Mid-Morning Snack - 10%
-       "5": 0.35,  # Lunch - 35%
-       "6": 0.10,  # Evening Snack - 10%
-       "7": 0.25   # Dinner - 25%
-   }
-  
-   # Allow ±10% flexibility per slot
-   slot_calories = {}
-   for slot_id, percentage in distributions.items():
-       base_calories = target_calories * percentage
-       slot_calories[slot_id] = {
-           "target": round(base_calories),
-           "min": round(base_calories * 0.9),
-           "max": round(base_calories * 1.1)
-       }
-  
-   return slot_calories
-
-
-def validate_and_adjust_calories(meal_data, target_calories, max_attempts=3):
-   """Validate total calories and adjust if needed"""
-  
-   def calculate_total_calories(meal_data):
-       total = 0
-       for meal_slot in meal_data.get("meals", []):
-           for food in meal_slot.get("foods", []):
-               total += food.get("calories", 0)
-       return total
-  
-   def scale_meal_calories(meal_data, scale_factor):
-       """Scale all calories in the meal plan by a factor"""
-       for meal_slot in meal_data.get("meals", []):
-           for food in meal_slot.get("foods", []):
-               food["calories"] = round(food["calories"] * scale_factor)
-               food["protein"] = round(food["protein"] * scale_factor, 1)
-               food["carbs"] = round(food["carbs"] * scale_factor, 1)
-               food["fat"] = round(food["fat"] * scale_factor, 1)
-       return meal_data
-  
-   current_calories = calculate_total_calories(meal_data)
-   tolerance = target_calories * 0.15  # Allow 15% tolerance
-  
-   print(f"DEBUG: Current calories: {current_calories}, Target: {target_calories}")
-  
-   if abs(current_calories - target_calories) <= tolerance:
-       print(f"DEBUG: Calories within tolerance")
-       return meal_data
-  
-   # Calculate adjustment factor
-   if current_calories > 0:
-       scale_factor = target_calories / current_calories
-       print(f"DEBUG: Scaling meals by factor: {scale_factor:.2f}")
-       return scale_meal_calories(meal_data, scale_factor)
-  
-   return meal_data
-
-
 def generate_meal_plan_with_ai(profile, diet_type, cuisine_type, day_name, previous_meals=None):
     """Generate meal plan for a specific day using AI with accurate calorie control and diet restrictions"""
     
@@ -1983,109 +1907,8 @@ def get_diet_specific_restrictions(diet_type):
             "special_notes": "Foods available to paleolithic humans. No grains, legumes, or dairy."
         }
     }
-    
-    return restrictions.get(diet_type, restrictions["vegetarian"])
 
-def format_meal_plan_for_display(meal_plan, profile, diet_type, cuisine_type):
-    """Format meal plan data for frontend display with proper structure"""
-    
-    # Calculate total nutrition across all days
-    total_nutrition = {'calories': 0, 'protein': 0, 'carbs': 0, 'fat': 0}
-    formatted_days = []
-    
-    for day_name, day_data in meal_plan.items():
-        day_nutrition = {'calories': 0, 'protein': 0, 'carbs': 0, 'fat': 0}
-        formatted_meals = []
-        
-        # Process each meal slot
-        for meal_slot in day_data:
-            slot_nutrition = {'calories': 0, 'protein': 0, 'carbs': 0, 'fat': 0}
-            formatted_foods = []
-            
-            for food in meal_slot.get('foodList', []):
-                formatted_foods.append({
-                    'name': food.get('name', ''),
-                    'quantity': food.get('quantity', ''),
-                    'calories': food.get('calories', 0),
-                    'protein': food.get('protein', 0),
-                    'carbs': food.get('carbs', 0),
-                    'fat': food.get('fat', 0),
-                    'image': food.get('pic', '')
-                })
-                
-                # Add to slot nutrition
-                slot_nutrition['calories'] += food.get('calories', 0)
-                slot_nutrition['protein'] += food.get('protein', 0)
-                slot_nutrition['carbs'] += food.get('carbs', 0)
-                slot_nutrition['fat'] += food.get('fat', 0)
-            
-            formatted_meals.append({
-                'id': meal_slot.get('id'),
-                'title': meal_slot.get('title'),
-                'timeRange': meal_slot.get('timeRange'),
-                'foods': formatted_foods,
-                'nutrition': {
-                    'calories': round(slot_nutrition['calories']),
-                    'protein': round(slot_nutrition['protein'], 1),
-                    'carbs': round(slot_nutrition['carbs'], 1),
-                    'fat': round(slot_nutrition['fat'], 1)
-                },
-                'foodCount': len(formatted_foods)
-            })
-            
-            # Add to day nutrition
-            day_nutrition['calories'] += slot_nutrition['calories']
-            day_nutrition['protein'] += slot_nutrition['protein']
-            day_nutrition['carbs'] += slot_nutrition['carbs']
-            day_nutrition['fat'] += slot_nutrition['fat']
-        
-        formatted_days.append({
-            'dayName': day_name.replace('_', ' ').title(),
-            'dayKey': day_name,
-            'meals': formatted_meals,
-            'dailyNutrition': {
-                'calories': round(day_nutrition['calories']),
-                'protein': round(day_nutrition['protein'], 1),
-                'carbs': round(day_nutrition['carbs'], 1),
-                'fat': round(day_nutrition['fat'], 1)
-            },
-            'totalMeals': len([meal for meal in formatted_meals if meal['foodCount'] > 0])
-        })
-        
-        # Add to total nutrition
-        total_nutrition['calories'] += day_nutrition['calories']
-        total_nutrition['protein'] += day_nutrition['protein']
-        total_nutrition['carbs'] += day_nutrition['carbs']
-        total_nutrition['fat'] += day_nutrition['fat']
-    
-    # Calculate averages
-    num_days = len(formatted_days)
-    avg_nutrition = {
-        'calories': round(total_nutrition['calories'] / num_days) if num_days > 0 else 0,
-        'protein': round(total_nutrition['protein'] / num_days, 1) if num_days > 0 else 0,
-        'carbs': round(total_nutrition['carbs'] / num_days, 1) if num_days > 0 else 0,
-        'fat': round(total_nutrition['fat'] / num_days, 1) if num_days > 0 else 0
-    }
-    
-    return {
-        'templateInfo': {
-            'clientGoal': profile.get('weight_delta_text', ''),
-            'targetCalories': profile.get('target_calories', 0),
-            'dietType': diet_type.replace('_', ' ').title(),
-            'cuisineType': cuisine_type.replace('_', ' ').title(),
-            'totalDays': num_days
-        },
-        'nutritionSummary': {
-            'daily': avg_nutrition,
-            'weekly': {
-                'calories': round(total_nutrition['calories']),
-                'protein': round(total_nutrition['protein'], 1),
-                'carbs': round(total_nutrition['carbs'], 1),
-                'fat': round(total_nutrition['fat'], 1)
-            }
-        },
-        'days': formatted_days
-    }
+    return restrictions.get(diet_type, restrictions["vegetarian"])
 
 
 def get_protein_suggestions(diet_type, cuisine):
@@ -2329,20 +2152,16 @@ I'll create a personalized 7-day meal template for you. First, are you vegetaria
                })
               
                async def _ask_cuisine():
-                   cuisine_msg = f"""Great! You've selected {diet_type}.
+                   cuisine_msg = f"""Great! You've selected {diet_type} 🎉
 
+Which cuisine do you prefer?
 
-Now, please choose your cuisine preference:
+🍛 North Indian
+🥥 South Indian 
+🍽️ Commonly Available
 
+Please choose: North Indian, South Indian, or Commonly Available"""
 
-• **North Indian** - Roti, chapati, paratha, naan, dal makhani, butter chicken, etc.
-• **South Indian** - Idli, dosa, sambar, rasam, coconut-based dishes, etc. 
-• **Commonly Available** - Simple, everyday foods that are widely accessible
-
-
-Please type one of: "North Indian", "South Indian", or "Commonly Available"
-Note: For Ketogenic and Paleo diets, I can include specialized ingredients that might be less common in regular Indian stores if needed for proper nutrition."""
-                  
                    yield f"data: {json.dumps({'message': cuisine_msg, 'type': 'cuisine_selection'})}\n\n"
                    yield "event: done\ndata: [DONE]\n\n"
               
@@ -3156,13 +2975,22 @@ Example: Type "2" to change only Tuesday"""
 
            async def _welcome_with_greeting():
                # Then show the welcome message with profile info
-               welcome_msg = f"""I can see your profile:
-• Current Weight: {profile['current_weight']} kg
-• Target Weight: {profile['target_weight']} kg
-• Goal: {profile['weight_delta_text']}
-• Daily Calorie Target: {profile['target_calories']} calories
+               welcome_msg = f"""👋 Hello! I can see your profile:
 
-I'll create a personalized 7-day meal template for you. First, are you vegetarian or non-vegetarian or eggetarian or vegan or ketogenic or paleo or jain?"""
+⚖️ Current Weight: {profile['current_weight']} kg
+🎯 Target Weight: {profile['target_weight']} kg
+🏆 Goal: {profile['weight_delta_text']}
+🍽️ Daily Calorie Target: {profile['target_calories']} kcal
+
+🥗 I'll create a personalized 7-day meal plan just for you!  
+First, please tell me your diet preference:  
+🌱 Vegetarian  
+🍗 Non-Vegetarian  
+🥚 Eggetarian  
+🌿 Vegan  
+🥩 Ketogenic  
+🥓 Paleo  
+🙏 Jain"""
 
                await mem.set_pending(user_id, {
                    "state": "awaiting_diet_preference",
@@ -3191,24 +3019,6 @@ I'll create a personalized 7-day meal template for you. First, are you vegetaria
       
        return StreamingResponse(_critical_error(), media_type="text/event-stream",
                                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-
-
-
-
-
-def prepare_json_data_for_db(data):
-    """Prepare data for storing in JSON database column (returns Python object, not JSON string)"""
-    if isinstance(data, str):
-        # If it's a JSON string, parse it back to Python object for DB storage
-        try:
-            return json.loads(data)
-        except json.JSONDecodeError:
-            # If parsing fails, wrap in error object
-            return {"error": "Invalid JSON", "raw_data": data}
-    else:
-        # If it's already a Python object, return as-is
-        return data
-
 
 
 class UserId(BaseModel):
@@ -3269,49 +3079,23 @@ async def exit_chat(
    req: UserId,
    mem = Depends(get_mem),
 ):
-   """Called when user exits the chatbot - clears conversation state"""
+   """Called when user exits the chatbot - clears conversation state and chat history"""
    try:
-       print(f"User {req.user_id} exiting food template chatbot - clearing state")
+       print(f"User {req.user_id} exiting food template chatbot - clearing all chat data")
 
-       # Clear pending state
-       await mem.clear_pending(req.user_id)
-
-       # Optionally clear chat history too
-       history_key = f"template_chat:{req.user_id}:history"
-       await mem.r.delete(history_key)
+       # Clear both chat history and pending state
+       await mem.clear_chat_on_exit(req.user_id)
 
        return {
            "status": "success",
            "user_id": req.user_id,
-           "message": "Chat state cleared successfully"
+           "message": "Chat history and state cleared successfully"
        }
    except Exception as e:
-       print(f"Error clearing chat state for user {req.user_id}: {e}")
+       print(f"Error clearing chat for user {req.user_id}: {e}")
        return {"status": "error", "user_id": req.user_id, "error": str(e)}
 
 
-
-
-@router.get("/test_diet_detection")
-async def test_diet_detection(text: str):
-   """Test endpoint to check diet preference detection"""
-   result = detect_diet_preference(text)
-   return {
-       "input": text,
-       "detected_diet": result,
-       "status": "success" if result else "no_match"
-   }
-
-
-@router.get("/test_cuisine_detection")
-async def test_cuisine_detection(text: str):
-   """Test endpoint to check cuisine preference detection"""
-   result = detect_cuisine_preference(text)
-   return {
-       "input": text,
-       "detected_cuisine": result,
-       "status": "success" if result else "no_match"
-   }
 
 
 @router.get("/get_saved_template/{client_id}")
@@ -3352,27 +3136,7 @@ async def delete_saved_template(client_id: int, db: Session = Depends(get_db)):
     except Exception as e:
         db.rollback()
         return {"status": "error", "message": str(e)}
-    
 
-@router.get("/test_db_connection")
-async def test_db_connection(db: Session = Depends(get_db)):
-    """Test if database connection works"""
-    try:
-        count = db.query(ClientDietTemplate).count()
-        return {"status": "success", "table_exists": True, "current_records": count}
-    except Exception as e:
-        return {"status": "error", "message": str(e), "table_exists": False}
-    
-
-@router.get("/check_saved/{client_id}")
-async def check_saved(client_id: int, db: Session = Depends(get_db)):
-    """Check if templates are saved"""
-    try:
-        count = db.query(ClientDietTemplate).filter(ClientDietTemplate.client_id == client_id).count()
-        return {"client_id": client_id, "saved_templates": count}
-    except Exception as e:
-        return {"error": str(e)}
-    
 
 @router.post("/structurize_and_save")
 async def structurize_and_save_meal_template(
@@ -3434,179 +3198,5 @@ async def structurize_and_save_meal_template(
         
     except Exception as e:
         print(f"ERROR: Structurize and save failed: {e}")
-        db.rollback()
-        return {"status": "error", "message": str(e)}
-
-
-# =============== NEW MEAL TEMPLATE ENDPOINTS ===============
-
-@router.post("/meal-templates")
-async def create_meal_template(request: dict, db: Session = Depends(get_db)):
-    """Create a new meal template with the specified format"""
-    try:
-        # Extract data from request
-        template_id = request.get("id", str(uuid.uuid4()))
-        title = request.get("title")
-        tagline = request.get("tagline", "")
-        time_range = request.get("timeRange", "")
-        food_list = request.get("foodList", [])
-        client_id = request.get("client_id")
-        is_public = request.get("is_public", True)
-
-        if not title or not food_list:
-            return {"status": "error", "message": "Title and foodList are required"}
-
-        # Calculate items count
-        items_count = len(food_list)
-
-        # Validate food items structure
-        for food_item in food_list:
-            required_fields = ["id", "name", "calories", "quantity"]
-            if not all(field in food_item for field in required_fields):
-                return {"status": "error", "message": f"Each food item must have: {required_fields}"}
-
-        # Create meal template
-        meal_template = MealTemplate(
-            id=template_id,
-            title=title,
-            tagline=tagline,
-            time_range=time_range,
-            items_count=items_count,
-            food_list=food_list,  # Store as Python object in JSON column
-            client_id=client_id,
-            is_public=is_public
-        )
-
-        db.add(meal_template)
-        db.commit()
-
-        return {
-            "status": "success",
-            "message": "Meal template created successfully",
-            "template_id": template_id
-        }
-
-    except Exception as e:
-        print(f"ERROR: Create meal template failed: {e}")
-        db.rollback()
-        return {"status": "error", "message": str(e)}
-
-
-@router.get("/meal-templates")
-async def get_meal_templates(
-    client_id: int = Query(None),
-    is_public: bool = Query(True),
-    db: Session = Depends(get_db)
-):
-    """Get meal templates with optional filtering"""
-    try:
-        query = db.query(MealTemplate)
-
-        if client_id is not None:
-            # Get templates for specific client or public templates
-            query = query.filter(
-                (MealTemplate.client_id == client_id) |
-                (MealTemplate.is_public == True)
-            )
-        elif is_public:
-            # Get only public templates
-            query = query.filter(MealTemplate.is_public == True)
-
-        templates = query.order_by(MealTemplate.created_at.desc()).all()
-
-        # Format response to match your desired structure
-        result = []
-        for template in templates:
-            result.append({
-                "id": template.id,
-                "title": template.title,
-                "tagline": template.tagline,
-                "foodList": template.food_list,  # Already a Python object from JSON column
-                "timeRange": template.time_range,
-                "itemsCount": template.items_count
-            })
-
-        return {
-            "status": "success",
-            "templates": result,
-            "total_count": len(result)
-        }
-
-    except Exception as e:
-        print(f"ERROR: Get meal templates failed: {e}")
-        return {"status": "error", "message": str(e)}
-
-
-@router.get("/meal-templates/{template_id}")
-async def get_meal_template_by_id(template_id: str, db: Session = Depends(get_db)):
-    """Get a specific meal template by ID"""
-    try:
-        template = db.query(MealTemplate).filter(MealTemplate.id == template_id).first()
-
-        if not template:
-            return {"status": "error", "message": "Template not found"}
-
-        result = {
-            "id": template.id,
-            "title": template.title,
-            "tagline": template.tagline,
-            "foodList": template.food_list,
-            "timeRange": template.time_range,
-            "itemsCount": template.items_count
-        }
-
-        return {"status": "success", "template": result}
-
-    except Exception as e:
-        print(f"ERROR: Get meal template failed: {e}")
-        return {"status": "error", "message": str(e)}
-
-
-@router.put("/meal-templates/{template_id}")
-async def update_meal_template(template_id: str, request: dict, db: Session = Depends(get_db)):
-    """Update an existing meal template"""
-    try:
-        template = db.query(MealTemplate).filter(MealTemplate.id == template_id).first()
-
-        if not template:
-            return {"status": "error", "message": "Template not found"}
-
-        # Update fields if provided
-        if "title" in request:
-            template.title = request["title"]
-        if "tagline" in request:
-            template.tagline = request["tagline"]
-        if "timeRange" in request:
-            template.time_range = request["timeRange"]
-        if "foodList" in request:
-            template.food_list = request["foodList"]
-            template.items_count = len(request["foodList"])
-
-        db.commit()
-
-        return {"status": "success", "message": "Template updated successfully"}
-
-    except Exception as e:
-        print(f"ERROR: Update meal template failed: {e}")
-        db.rollback()
-        return {"status": "error", "message": str(e)}
-
-
-@router.delete("/meal-templates/{template_id}")
-async def delete_meal_template(template_id: str, db: Session = Depends(get_db)):
-    """Delete a meal template"""
-    try:
-        template = db.query(MealTemplate).filter(MealTemplate.id == template_id).first()
-
-        if not template:
-            return {"status": "error", "message": "Template not found"}
-
-        db.delete(template)
-        db.commit()
-
-        return {"status": "success", "message": "Template deleted successfully"}
-
-    except Exception as e:
-        print(f"ERROR: Delete meal template failed: {e}")
         db.rollback()
         return {"status": "error", "message": str(e)}
