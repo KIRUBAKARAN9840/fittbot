@@ -1161,7 +1161,7 @@ def is_quantity_input(text):
 def parse_quantity_and_unit(text, food_name, existing_unit=None):
     """Smart parsing that handles large numbers and auto-converts to appropriate units"""
     text_lower = text.lower().strip()
-    
+
     # Pattern matching - check if user specified a unit explicitly
     patterns_with_units = [
         r'(\d+(?:\.\d+)?)\s*(spoons?|tablespoons?|tbsp|teaspoons?|tsp)',
@@ -1171,7 +1171,7 @@ def parse_quantity_and_unit(text, food_name, existing_unit=None):
         r'(\d+(?:\.\d+)?)\s*(ml|milliliters?|glasses?|cups?)',
         r'(\d+(?:\.\d+)?)\s*(slices?|slc)',
     ]
-    
+
     # Check if user explicitly provided a unit
     user_provided_unit = False
     for pattern in patterns_with_units:
@@ -1180,48 +1180,28 @@ def parse_quantity_and_unit(text, food_name, existing_unit=None):
             quantity = float(match.group(1))
             unit = match.group(2)
             user_provided_unit = True
-            
+
             # Handle unit conversion
             if unit in ['kg', 'kilogram', 'kilograms']:
                 quantity = quantity * 1000
                 unit = 'grams'
             else:
                 unit = normalize_unit_with_context(unit, food_name)
-            
+
             print(f"DEBUG: User provided unit - parsed '{text}' as {quantity} {unit} for {food_name}")
             return quantity, unit
-    
+
     # Check for just numbers (no unit provided by user)
     number_match = re.search(r'(\d+(?:\.\d+)?)', text_lower)
     if number_match:
         quantity = float(number_match.group(1))
-        
+
         if not user_provided_unit:
-            # User didn't provide a unit - apply smart logic
-            
-            # If quantity is large (>10), convert to weight/volume units
-            if quantity > 10:
-                # Determine if food is liquid or solid
-                if is_liquid_food(food_name):
-                    # For liquids, convert large numbers to ml
-                    final_unit = 'ml'
-                    # Cap at reasonable maximum (e.g., 1000ml = 1 liter)
-                    final_quantity = min(quantity, 1000)
-                else:
-                    # For solid foods, convert large numbers to grams  
-                    final_unit = 'grams'
-                    # Cap at reasonable maximum (e.g., 500g for most foods)
-                    final_quantity = min(quantity, 500)
-                
-                print(f"DEBUG: Large number detected - converted {quantity} to {final_quantity} {final_unit} for {food_name}")
-                return final_quantity, final_unit
-            
-            else:
-                # Small number (<=10), use the food's existing unit
-                final_unit = existing_unit if existing_unit else 'pieces'
-                print(f"DEBUG: Small number - using existing unit: {quantity} {final_unit} for {food_name}")
-                return quantity, final_unit
-    
+            # User didn't provide a unit - use the food's existing unit
+            final_unit = existing_unit if existing_unit else 'pieces'
+            print(f"DEBUG: No unit provided - using existing unit: {quantity} {final_unit} for {food_name}")
+            return quantity, final_unit
+
     print(f"DEBUG: Could not parse quantity from '{text}'")
     return None, None
 
