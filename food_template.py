@@ -667,6 +667,17 @@ def get_meal_emoji(meal_title):
     else:
         return "🍴"
 
+def format_day_loader_json(day_name):
+    """Format a loader JSON event for generating a specific day with animation"""
+    day_display_name = day_name.replace('_', ' ').title()
+    return {
+        "type": "loader",
+        "is_loader": True,
+        "day_name": day_display_name,
+        "message": f"Generating {day_display_name} meal plan..."
+    }
+
+
 def format_single_day_for_streaming(day_name, day_meals):
     """Format a single day's meal plan for streaming (appends to existing message)"""
 
@@ -2449,6 +2460,10 @@ Daily Goal: {profile['target_calories']} cal
 
                         for day_index, day in enumerate(days):
                             try:
+                                # Send animated loader event before generating each day
+                                loader_event = format_day_loader_json(day)
+                                yield sse_json(loader_event)
+
                                 meal_data = generate_meal_plan_with_ai(profile, diet_type, cuisine_type, day, previous_meals)
                                 template = convert_ai_meal_to_template(meal_data)
                                 meal_plan[day.lower()] = template
@@ -2473,6 +2488,11 @@ Daily Goal: {profile['target_calories']} cal
 
                             except Exception as e:
                                 print(f"Error generating meal plan for {day}: {e}")
+
+                                # Send loader event for fallback too
+                                loader_event = format_day_loader_json(day)
+                                yield sse_json(loader_event)
+
                                 # Use fallback for this day
                                 fallback_data = create_fallback_meal_plan(day, diet_type, cuisine_type, profile, previous_meals)
                                 template = convert_ai_meal_to_template(fallback_data)
@@ -2701,6 +2721,10 @@ Avoided: {avoid_text}
 
                         for day in days:
                             try:
+                                # Send animated loader event before generating each day
+                                loader_event = format_day_loader_json(day)
+                                yield sse_json(loader_event)
+
                                 # Generate THIS day in executor (non-blocking)
                                 day_gen_func = partial(
                                     generate_single_day_with_restrictions,
@@ -2731,6 +2755,11 @@ Avoided: {avoid_text}
 
                             except Exception as e:
                                 print(f"Error generating {day}: {e}")
+
+                                # Send loader event for fallback too
+                                loader_event = format_day_loader_json(day)
+                                yield sse_json(loader_event)
+
                                 # Use fallback
                                 fallback_data = create_fallback_meal_plan(day, diet_type, cuisine_type, profile, previous_meals)
                                 template = convert_ai_meal_to_template(fallback_data)
