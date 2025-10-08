@@ -14,7 +14,7 @@ import json, re, os, random, uuid, traceback
 import httpx
 from fastapi import APIRouter, HTTPException, UploadFile, File, Query, Depends
 
-from app.models.fittbot_models import ClientDietTemplate, MealTemplate
+from app.models.fittbot_models import ClientDietTemplate
 from app.fittbot_api.v1.client.client_api.chatbot.chatbot_services.asr import transcribe_audio
 import orjson 
 
@@ -99,8 +99,6 @@ async def voice_transcribe(
         transcript_en = tinfo["english"]
         lang_code = tinfo["lang"]
 
-        print(f"[voice] lang={lang_code} raw={transcript!r} | en={transcript_en!r}")
-
         return {
             "transcript": transcript_en,
             "lang": lang_code,
@@ -184,51 +182,82 @@ def get_meal_template():
    return [
        {
            "id": "1",
-           "title": "Early Morning Detox",
+           "title": "Pre workout",
+           "tagline": "Energy boost",
            "foodList": [],
-           "timeRange": "6:00 am - 7:00 am",
+           "timeRange": "6:30-7:00 AM",
            "itemsCount": 0
        },
        {
            "id": "2",
-           "title": "Pre-Breakfast / Pre-Meal Starter",
+           "title": "Post workout",
+           "tagline": "Recovery fuel",
            "foodList": [],
-           "timeRange": "7:30 am - 8:00 am",
+           "timeRange": "7:30-8:00 AM",
            "itemsCount": 0
        },
        {
            "id": "3",
-           "title": "Breakfast",
+           "title": "Early morning Detox",
+           "tagline": "Early morning nutrition",
            "foodList": [],
-           "timeRange": "8:00 am - 9:30 am",
+           "timeRange": "5:30-6:00 AM",
            "itemsCount": 0
        },
        {
            "id": "4",
-           "title": "Mid-Morning Snack",
+           "title": "Pre-Breakfast / Pre-Meal Starter",
+           "tagline": "Pre-breakfast fuel",
            "foodList": [],
-           "timeRange": "10:30 am - 11:30 am",
+           "timeRange": "7:00-7:30 AM",
            "itemsCount": 0
        },
        {
            "id": "5",
-           "title": "Lunch",
+           "title": "Breakfast",
+           "tagline": "Start your day right",
            "foodList": [],
-           "timeRange": "12:30 pm - 2:00 pm",
+           "timeRange": "8:30-9:30 AM",
            "itemsCount": 0
        },
        {
            "id": "6",
-           "title": "Evening Snack",
+           "title": "Mid-Morning snack",
+           "tagline": "Healthy meal",
            "foodList": [],
-           "timeRange": "4:00 pm - 6:00 pm",
+           "timeRange": "10:00-11:00 AM",
            "itemsCount": 0
        },
        {
            "id": "7",
-           "title": "Dinner",
+           "title": "Lunch",
+           "tagline": "Nutritious midday meal",
            "foodList": [],
-           "timeRange": "7:00 pm - 8:30 pm",
+           "timeRange": "1:00-2:00 PM",
+           "itemsCount": 0
+       },
+       {
+           "id": "8",
+           "title": "Evening snack",
+           "tagline": "Healthy meal",
+           "foodList": [],
+           "timeRange": "4:00-5:00 PM",
+           "itemsCount": 0
+       },
+       {
+           "id": "9",
+           "title": "Dinner",
+           "tagline": "End your day well",
+           "foodList": [],
+           "timeRange": "7:30-8:30 PM",
+           "itemsCount": 0
+       },
+       {
+           "id": "10",
+           "title": "Bed time",
+           "tagline": "Rest well",
+           "foodList": [],
+           "timeRange": "9:30-10:00 PM",
            "itemsCount": 0
        }
    ]
@@ -273,9 +302,6 @@ def create_food_item(name, calories, protein, carbs, fat, quantity, fiber=0, sug
 def save_meal_plan_to_database(client_id: int, meal_plan: dict, db: Session, replace_all: bool = False):
     """Save meal plan to database - only replaces templates with matching names"""
     try:
-        print(f"DEBUG: Starting database save for client {client_id}, replace_all: {replace_all}")
-        print(f"DEBUG: Meal plan keys: {list(meal_plan.keys())}")
-        
         # Standard day mapping
         standard_day_names = {
             'monday': 'Monday', 'tuesday': 'Tuesday', 'wednesday': 'Wednesday',
@@ -286,7 +312,6 @@ def save_meal_plan_to_database(client_id: int, meal_plan: dict, db: Session, rep
         if replace_all:
             # Full replacement - delete all existing records (only when explicitly requested)
             deleted_count = db.query(ClientDietTemplate).filter(ClientDietTemplate.client_id == client_id).delete()
-            print(f"DEBUG: Full replacement - deleted {deleted_count} existing records")
         else:
             # Selective replacement - only delete records that will be replaced
             names_to_replace = []
@@ -299,10 +324,8 @@ def save_meal_plan_to_database(client_id: int, meal_plan: dict, db: Session, rep
                     ClientDietTemplate.client_id == client_id,
                     ClientDietTemplate.template_name.in_(names_to_replace)
                 ).delete(synchronize_session=False)
-                print(f"DEBUG: Selective replacement - deleted {deleted_count} records with names: {names_to_replace}")
             else:
                 deleted_count = 0
-                print(f"DEBUG: No names to replace, skipping deletion")
         
         saved_count = 0
         
@@ -317,17 +340,12 @@ def save_meal_plan_to_database(client_id: int, meal_plan: dict, db: Session, rep
                     # If it's a JSON string, parse it back to Python object
                     try:
                         diet_data_obj = json.loads(day_data)
-                        print(f"DEBUG: Parsed JSON string to Python object for day '{day_name}'")
                     except json.JSONDecodeError:
                         # If parsing fails, treat as plain text (shouldn't happen for meal plans)
                         diet_data_obj = {"error": "Invalid JSON", "raw_data": day_data}
-                        print(f"DEBUG: Failed to parse JSON for day '{day_name}', storing as error object")
                 else:
                     # If it's already a Python object, use directly
                     diet_data_obj = day_data
-                    print(f"DEBUG: Using Python object directly for day '{day_name}'")
-
-                print(f"DEBUG: Saving day '{day_name}' (key: {day_key}) with Python object type: {type(diet_data_obj)}")
 
                 new_record = ClientDietTemplate(
                     client_id=client_id,
@@ -343,8 +361,7 @@ def save_meal_plan_to_database(client_id: int, meal_plan: dict, db: Session, rep
         
         # Commit all changes
         db.commit()
-        print(f"DEBUG: Successfully committed {saved_count} records to database")
-        
+
         return {
             'success': True, 
             'saved_count': saved_count,
@@ -358,7 +375,6 @@ def save_meal_plan_to_database(client_id: int, meal_plan: dict, db: Session, rep
         print(f"ERROR: Full traceback: {traceback.format_exc()}")
         try:
             db.rollback()
-            print("DEBUG: Database rollback completed")
         except Exception as rollback_error:
             print(f"ERROR: Rollback failed: {rollback_error}")
         
@@ -880,9 +896,7 @@ def regenerate_meal_plan_without_allergens(meal_plan, restrictions, profile, die
     
     # Convert to lowercase for matching
     avoid_foods = [food.lower() for food in avoid_foods]
-    
-    print(f"DEBUG: Foods to avoid: {avoid_foods}")
-    
+
     avoid_list = ', '.join(avoid_foods)
     target_calories = profile['target_calories']
     slot_calories = calculate_meal_calories_distribution(target_calories)
@@ -937,8 +951,6 @@ def regenerate_meal_plan_without_allergens(meal_plan, restrictions, profile, die
     previous_meals = {'breakfasts': [], 'lunches': [], 'dinners': []}
     
     for day in days:
-        print(f"DEBUG: Regenerating {day} without allergens")
-        
         # Create day-specific context to avoid repetition
         previous_context = ""
         if previous_meals['breakfasts'] or previous_meals['lunches'] or previous_meals['dinners']:
@@ -982,7 +994,7 @@ Alternative suggestions for restricted foods:
 
 Create a complete {day} meal plan avoiding ALL restricted foods while maintaining:
 - Same total daily calories: {target_calories}
-- Same meal structure (7 time slots)
+- Same meal structure (10 time slots)
 - Same cuisine preference: {cuisine_type.replace('_', ' ').title()}
 - Same diet type: {diet_type}
 - UNIQUE meals different from previous days
@@ -1064,14 +1076,11 @@ Create UNIQUE daily variations - each day should have different main meals even 
             day_template = convert_ai_meal_to_template(fallback_data)
             new_meal_plan[day.lower()] = day_template
     
-    print(f"DEBUG: Successfully regenerated {len(new_meal_plan)} unique daily plans")
     return new_meal_plan
 
 def simple_food_removal(meal_plan, foods_to_remove):
     """Simple food removal without AI regeneration - for quick fixes"""
     try:
-        print(f"DEBUG: Simple removal of foods: {foods_to_remove}")
-        
         if not foods_to_remove:
             return meal_plan
         
@@ -1095,7 +1104,6 @@ def simple_food_removal(meal_plan, foods_to_remove):
                     should_remove = any(remove_food in food_name for remove_food in remove_foods_lower)
                     
                     if should_remove:
-                        print(f"DEBUG: Removing {food_item.get('name')} from {meal_slot.get('title', 'Unknown meal')}")
                         slot_calories_removed += food_item.get('calories', 0)
                         removed_items_count += 1
                     else:
@@ -1121,15 +1129,13 @@ def simple_food_removal(meal_plan, foods_to_remove):
                     )
                     updated_slot['foodList'].append(replacement_food)
                     updated_slot['itemsCount'] = 1
-                    print(f"DEBUG: Added replacement food to maintain calories")
-                
+
                 updated_day_data.append(updated_slot)
             
             updated_meal_plan[day_key] = updated_day_data
-        
-        print(f"DEBUG: Simple removal completed. Removed {removed_items_count} items")
+
         return updated_meal_plan
-        
+
     except Exception as e:
         print(f"ERROR: Simple food removal failed: {e}")
         print(f"ERROR: Simple removal traceback: {traceback.format_exc()}")
@@ -1140,15 +1146,18 @@ def simple_food_removal(meal_plan, foods_to_remove):
 def calculate_meal_calories_distribution(target_calories):
    """Calculate calorie distribution across meal slots"""
    distributions = {
-       "1": 0.02,  # Early Morning Detox - 2%
-       "2": 0.05,  # Pre-Breakfast Starter - 5%
-       "3": 0.25,  # Breakfast - 25%
-       "4": 0.10,  # Mid-Morning Snack - 10%
-       "5": 0.35,  # Lunch - 35%
-       "6": 0.10,  # Evening Snack - 10%
-       "7": 0.25   # Dinner - 25%
+       "1": 0.05,  # Pre workout - 5%
+       "2": 0.08,  # Post workout - 8%
+       "3": 0.02,  # Early morning Detox - 2%
+       "4": 0.05,  # Pre-Breakfast Starter - 5%
+       "5": 0.25,  # Breakfast - 25%
+       "6": 0.10,  # Mid-Morning Snack - 10%
+       "7": 0.25,  # Lunch - 25%
+       "8": 0.08,  # Evening Snack - 8%
+       "9": 0.20,  # Dinner - 20%
+       "10": 0.02  # Bed time - 2%
    }
-  
+
    # Allow ±10% flexibility per slot
    slot_calories = {}
    for slot_id, percentage in distributions.items():
@@ -1158,7 +1167,7 @@ def calculate_meal_calories_distribution(target_calories):
            "min": round(base_calories * 0.9),
            "max": round(base_calories * 1.1)
        }
-  
+
    return slot_calories
 
 
@@ -1184,17 +1193,13 @@ def validate_and_adjust_calories(meal_data, target_calories, max_attempts=3):
   
    current_calories = calculate_total_calories(meal_data)
    tolerance = target_calories * 0.13 # Allow 15% tolerance
-  
-   print(f"DEBUG: Current calories: {current_calories}, Target: {target_calories}")
-  
+
    if abs(current_calories - target_calories) <= tolerance:
-       print(f"DEBUG: Calories within tolerance")
        return meal_data
-  
+
    # Calculate adjustment factor
    if current_calories > 0:
        scale_factor = target_calories / current_calories
-       print(f"DEBUG: Scaling meals by factor: {scale_factor:.2f}")
        return scale_meal_calories(meal_data, scale_factor)
   
    return meal_data
@@ -1347,7 +1352,6 @@ VERIFY:
 """
     
     try:
-        print(f"DEBUG: Calling OpenAI for {day_name} meal plan...")
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
@@ -1376,37 +1380,28 @@ Return ONLY valid JSON - no markdown formatting or extra text."""
         )
         
         result = response.choices[0].message.content.strip()
-        print(f"DEBUG: Raw AI response for {day_name}: {result[:200]}...")
-        
+
         # Clean JSON response
         result = re.sub(r"^```json\s*", "", result)
         result = re.sub(r"\s*```$", "", result)
         result = result.strip()
-        
-        print(f"DEBUG: Cleaned response: {result[:200]}...")
-        
+
         try:
             meal_data = json.loads(result)
-            print(f"DEBUG: Successfully parsed JSON for {day_name}")
         except json.JSONDecodeError as je:
-            print(f"DEBUG: JSON parse error for {day_name}: {je}")
-            print(f"DEBUG: Problematic JSON: {result}")
             raise je
-        
+
         # Validate diet compliance
-        if not validate_diet_compliance(meal_data, diet_type):
-            print(f"WARNING: Generated meal plan may not be fully {diet_type} compliant")
-        
+        validate_diet_compliance(meal_data, diet_type)
+
         # Validate and adjust calories
         validated_meal_data = validate_and_adjust_calories(meal_data, target_calories)
-        print(f"DEBUG: Successfully generated and validated {day_name} meal plan")
-        
+
         return validated_meal_data
         
     except Exception as e:
         print(f"AI meal generation error for {day_name}: {e}")
         print(f"AI generation traceback: {traceback.format_exc()}")
-        print(f"DEBUG: Falling back to default meal plan for {day_name}")
         return create_fallback_meal_plan(day_name, diet_type, cuisine_type, profile, previous_meals)
 
 
@@ -1425,13 +1420,16 @@ def get_curry_suggestions(diet_type, cuisine):
 def get_slot_name(slot_id):
    """Get readable name for meal slot"""
    slot_names = {
-       "1": "Early Morning Detox",
-       "2": "Pre-Breakfast Starter",
-       "3": "Breakfast",
-       "4": "Mid-Morning Snack",
-       "5": "Lunch",
-       "6": "Evening Snack",
-       "7": "Dinner"
+       "1": "Pre workout",
+       "2": "Post workout",
+       "3": "Early morning Detox",
+       "4": "Pre-Breakfast / Pre-Meal Starter",
+       "5": "Breakfast",
+       "6": "Mid-Morning snack",
+       "7": "Lunch",
+       "8": "Evening snack",
+       "9": "Dinner",
+       "10": "Bed time"
    }
    return slot_names.get(slot_id, f"Slot {slot_id}")
 
@@ -1444,14 +1442,18 @@ def create_fallback_meal_plan(day_name, diet_type, cuisine_type, profile, previo
    # Create basic fallback based on cuisine and diet type
    fallback_meals = []
   
-   for slot_id in ["1", "2", "3", "4", "5", "6", "7"]:
+   for slot_id in ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]:
        slot_target = slot_calories[slot_id]["target"]
-      
-       if slot_id == "1":  # Early Morning
+
+       if slot_id == "1":  # Pre workout
+           foods = [{"name": "Banana", "calories": slot_target, "protein": 1, "carbs": 27, "fat": 0, "quantity": "1 medium"}]
+       elif slot_id == "2":  # Post workout
+           foods = [{"name": "Protein shake", "calories": slot_target, "protein": 20, "carbs": 15, "fat": 2, "quantity": "1 serving"}]
+       elif slot_id == "3":  # Early morning Detox
            foods = [{"name": "Warm lemon water", "calories": slot_target, "protein": 0, "carbs": 2, "fat": 0, "quantity": "250 ml"}]
-       elif slot_id == "2":  # Pre-breakfast
+       elif slot_id == "4":  # Pre-breakfast
            foods = [{"name": "Soaked almonds", "calories": slot_target, "protein": 3, "carbs": 2, "fat": 5, "quantity": "5 pieces"}]
-       elif slot_id == "3":  # Breakfast
+       elif slot_id == "5":  # Breakfast
            if cuisine_type == "south_indian":
                foods = [
                    {"name": "Idli", "calories": int(slot_target * 0.6), "protein": 8, "carbs": 40, "fat": 2, "quantity": "4 pieces"},
@@ -1464,9 +1466,9 @@ def create_fallback_meal_plan(day_name, diet_type, cuisine_type, profile, previo
                    {"name": "Dal", "calories": int(slot_target * 0.3), "protein": 8, "carbs": 15, "fat": 4, "quantity": "150 grams"},
                    {"name": "Mixed vegetables", "calories": int(slot_target * 0.2), "protein": 3, "carbs": 8, "fat": 2, "quantity": "100 grams"}
                ]
-       elif slot_id == "4":  # Mid-morning
+       elif slot_id == "6":  # Mid-morning
            foods = [{"name": "Mixed fruit", "calories": slot_target, "protein": 2, "carbs": 20, "fat": 1, "quantity": "100 grams"}]
-       elif slot_id == "5":  # Lunch
+       elif slot_id == "7":  # Lunch
            if cuisine_type == "south_indian":
                foods = [
                    {"name": "Rice", "calories": int(slot_target * 0.4), "protein": 8, "carbs": 60, "fat": 2, "quantity": "200 grams"},
@@ -1481,9 +1483,9 @@ def create_fallback_meal_plan(day_name, diet_type, cuisine_type, profile, previo
                    {"name": "Mixed vegetables", "calories": int(slot_target * 0.25), "protein": 5, "carbs": 15, "fat": 4, "quantity": "150 grams"},
                    {"name": "Curd", "calories": int(slot_target * 0.15), "protein": 5, "carbs": 8, "fat": 3, "quantity": "100 grams"}
                ]
-       elif slot_id == "6":  # Evening
+       elif slot_id == "8":  # Evening snack
            foods = [{"name": "Tea with biscuits", "calories": slot_target, "protein": 3, "carbs": 15, "fat": 4, "quantity": "1 cup + 2 biscuits"}]
-       elif slot_id == "7":  # Dinner
+       elif slot_id == "9":  # Dinner
            if cuisine_type == "south_indian":
                foods = [
                    {"name": "Rice", "calories": int(slot_target * 0.4), "protein": 6, "carbs": 45, "fat": 1, "quantity": "150 grams"},
@@ -1496,7 +1498,9 @@ def create_fallback_meal_plan(day_name, diet_type, cuisine_type, profile, previo
                    {"name": "Dal", "calories": int(slot_target * 0.35), "protein": 10, "carbs": 20, "fat": 6, "quantity": "150 grams"},
                    {"name": "Vegetable curry", "calories": int(slot_target * 0.25), "protein": 4, "carbs": 12, "fat": 4, "quantity": "100 grams"}
                ]
-      
+       elif slot_id == "10":  # Bed time
+           foods = [{"name": "Warm milk", "calories": slot_target, "protein": 3, "carbs": 5, "fat": 3, "quantity": "150 ml"}]
+
        fallback_meals.append({
            "slot_id": slot_id,
            "target_calories": slot_target,
@@ -1547,18 +1551,18 @@ def extract_main_meals(meal_data):
        'lunches': [],
        'dinners': []
    }
-  
+
    for meal_slot in meal_data.get("meals", []):
        slot_id = meal_slot.get("slot_id")
        foods = meal_slot.get("foods", [])
-      
-       if slot_id == "3":  # Breakfast
+
+       if slot_id == "5":  # Breakfast
            main_meals['breakfasts'].extend([food.get("name", "") for food in foods])
-       elif slot_id == "5":  # Lunch
+       elif slot_id == "7":  # Lunch
            main_meals['lunches'].extend([food.get("name", "") for food in foods])
-       elif slot_id == "7":  # Dinner
+       elif slot_id == "9":  # Dinner
            main_meals['dinners'].extend([food.get("name", "") for food in foods])
-  
+
    return main_meals
 
 
@@ -1580,8 +1584,6 @@ def generate_7_day_meal_plan(profile, diet_type, cuisine_type, progress_callback
    }
 
    for day_index, day in enumerate(days):
-       print(f"DEBUG: Generating {cuisine_type} {diet_type} meal plan for {day}")
-
        # Report progress if callback provided
        if progress_callback:
            progress_callback(day, day_index + 1, len(days))
@@ -1624,9 +1626,7 @@ def generate_7_day_meal_plan(profile, diet_type, cuisine_type, progress_callback
 def detect_diet_preference(text):
     """Detect diet preference from user input with comprehensive diet options"""
     text = text.lower().strip()
-    
-    print(f"DEBUG: Analyzing diet text: '{text}'")
-    
+
     # Ketogenic patterns - check first (most specific)
     keto_patterns = [
         r'\bketo\b',
@@ -1729,46 +1729,38 @@ def detect_diet_preference(text):
     # 1. Ketogenic (most specific dietary restriction)
     for pattern in keto_patterns:
         if re.search(pattern, text):
-            print(f"DEBUG: Matched ketogenic pattern: {pattern}")
             return "ketogenic"
-    
+
     # 2. Paleo
     for pattern in paleo_patterns:
         if re.search(pattern, text):
-            print(f"DEBUG: Matched paleo pattern: {pattern}")
             return "paleo"
-    
+
     # 3. Jain diet (very specific restrictions)
     for pattern in jain_patterns:
         if re.search(pattern, text):
-            print(f"DEBUG: Matched jain pattern: {pattern}")
             return "jain"
-    
+
     # 4. Vegan (more restrictive than vegetarian)
     for pattern in vegan_patterns:
         if re.search(pattern, text):
-            print(f"DEBUG: Matched vegan pattern: {pattern}")
             return "vegan"
-    
+
     # 5. Eggetarian (vegetarian + eggs)
     for pattern in eggetarian_patterns:
         if re.search(pattern, text):
-            print(f"DEBUG: Matched eggetarian pattern: {pattern}")
             return "eggetarian"
-    
+
     # 6. Non-vegetarian
     for pattern in non_veg_patterns:
         if re.search(pattern, text):
-            print(f"DEBUG: Matched non-veg pattern: {pattern}")
             return "non-vegetarian"
-    
+
     # 7. Vegetarian (least specific)
     for pattern in veg_patterns:
         if re.search(pattern, text):
-            print(f"DEBUG: Matched veg pattern: {pattern}")
             return "vegetarian"
-    
-    print("DEBUG: No diet pattern matched")
+
     return None
   
 
@@ -1834,27 +1826,21 @@ def detect_cuisine_preference(text):
        r'\ball\b',
    ]
   
-   print(f"DEBUG: Analyzing cuisine preference: '{text}'")
-  
    # Check for North Indian
    for pattern in north_indian_patterns:
        if re.search(pattern, text):
-           print(f"DEBUG: Matched North Indian pattern: {pattern}")
            return "north_indian"
-  
+
    # Check for South Indian
    for pattern in south_indian_patterns:
        if re.search(pattern, text):
-           print(f"DEBUG: Matched South Indian pattern: {pattern}")
            return "south_indian"
-  
+
    # Check for commonly available
    for pattern in common_patterns:
        if re.search(pattern, text):
-           print(f"DEBUG: Matched commonly available pattern: {pattern}")
            return "commonly_available"
-  
-   print("DEBUG: No cuisine pattern matched")
+
    return None
 
 def get_diet_specific_restrictions(diet_type):
@@ -2057,9 +2043,256 @@ def validate_diet_compliance(meal_data, diet_type):
             food_name = food.get("name", "").lower()
             for avoided_food in avoid_foods:
                 if avoided_food in food_name:
-                    print(f"WARNING: Found {avoided_food} in {food_name} for {diet_type} diet")
                     return False
     return True
+
+
+def generate_single_day_with_restrictions(day_name, profile, diet_type, cuisine_type, avoid_foods, previous_meals):
+    """Generate a single day's meal plan avoiding specific foods (for streaming regeneration)"""
+
+    target_calories = profile['target_calories']
+    slot_calories = calculate_meal_calories_distribution(target_calories)
+
+    calorie_breakdown = "\n".join([
+        f"Slot {slot_id} ({get_slot_name(slot_id)}): {info['target']} calories (range: {info['min']}-{info['max']})"
+        for slot_id, info in slot_calories.items()
+    ])
+
+    cuisine_context = {
+        "north_indian": "Focus on North Indian cuisine: Roti, dal, curry-based dishes, paneer, rice dishes",
+        "south_indian": "Focus on South Indian cuisine: Idli, dosa, sambar, rice-based dishes, coconut",
+        "commonly_available": "Focus on commonly available Indian foods: Simple breads, rice, dal, vegetables"
+    }
+
+    cuisine_instruction = cuisine_context.get(cuisine_type, cuisine_context["commonly_available"])
+    avoid_list = ', '.join(avoid_foods) if avoid_foods else "none"
+
+    # Previous meals context
+    previous_context = ""
+    if previous_meals and (previous_meals.get('breakfasts') or previous_meals.get('lunches') or previous_meals.get('dinners')):
+        previous_context = f"""
+AVOID REPETITION:
+Previous Breakfasts: {', '.join(previous_meals.get('breakfasts', [])[-3:])}
+Previous Lunches: {', '.join(previous_meals.get('lunches', [])[-3:])}
+Previous Dinners: {', '.join(previous_meals.get('dinners', [])[-3:])}
+Ensure {day_name}'s meals are DIFFERENT.
+"""
+
+    prompt = f"""
+Create {day_name} meal plan AVOIDING these foods: {avoid_list}
+
+Profile:
+- Goal: {profile['goal_type']} ({profile['weight_delta_text']})
+- Target: {target_calories} calories/day
+- Diet: {diet_type}
+- Cuisine: {cuisine_type.replace('_', ' ').title()}
+
+CRITICAL: Completely avoid: {avoid_list}
+{previous_context}
+
+CALORIE REQUIREMENTS:
+{calorie_breakdown}
+
+{cuisine_instruction}
+
+Return ONLY valid JSON:
+{{
+    "day_name": "{day_name}",
+    "total_target_calories": {target_calories},
+    "restrictions_avoided": [{avoid_list}],
+    "meals": [
+        {{
+            "slot_id": "1-10",
+            "target_calories": number,
+            "foods": [
+                {{"name": "food", "calories": num, "protein": num, "carbs": num, "fat": num, "quantity": "amount"}}
+            ]
+        }}
+    ]
+}}
+"""
+
+    try:
+        response = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+            temperature=0.7
+        )
+
+        result = orjson.loads(response.choices[0].message.content)
+        return result
+    except Exception as e:
+        print(f"Error generating {day_name}: {e}")
+        # Return fallback
+        return create_fallback_meal_plan(day_name, diet_type, cuisine_type, profile, previous_meals)
+
+
+def ai_intent_classifier(user_input: str, current_state: str, oai) -> dict:
+    """
+    AI-driven intent classifier that understands user intent flexibly.
+    Handles typos, natural language, and context-aware interpretation.
+
+    Args:
+        user_input: The user's message (can contain typos, be informal)
+        current_state: Current conversation state
+        oai: OpenAI client
+
+    Returns:
+        dict with 'intent' and extracted parameters
+    """
+
+    system_prompt = f"""You are an intent classifier for a meal planning chatbot.
+Current conversation state: {current_state}
+
+Classify the user's intent into ONE of these categories:
+
+1. **diet_preference**: User is specifying their diet type
+   - Extract: diet_type (vegetarian, non-vegetarian, vegan, eggetarian, jain, ketogenic, paleo)
+
+2. **cuisine_preference**: User is specifying cuisine preference
+   - Extract: cuisine_type (north_indian, south_indian, commonly_available)
+   - Note: "simple", "basic", "common", "everyday" → commonly_available
+
+3. **food_allergy**: User mentions food allergies or items to avoid
+   - Extract: allergens (list of foods/ingredients to avoid)
+
+4. **food_removal**: User wants to remove specific foods
+   - Extract: foods_to_remove (list of food items)
+
+5. **day_rename_yes**: User agrees to rename days (yes, sure, okay, etc.)
+
+6. **day_rename_no**: User declines to rename days or wants to finalize (no, nope, done, finish, save, etc.)
+
+7. **day_selection**: User is selecting which days to rename (numbers, "all", day names)
+   - Extract: selected_days (list or "all")
+
+8. **custom_day_name**: User is providing a custom name for a day
+   - Extract: day_name (the custom name)
+
+9. **unclear**: User input is unclear or doesn't match any intent
+
+IMPORTANT: Be flexible with typos, informal language, and variations.
+Examples:
+- "im allergick to nuts" → food_allergy, allergens: ["nuts"]
+- "rmove dairy plz" → food_removal, foods_to_remove: ["dairy"]
+- "ya sure" → day_rename_yes
+- "nah im good" → day_rename_no
+- "non vej" → diet_preference, diet_type: "non-vegetarian"
+- "south indain cuisne" → cuisine_preference, cuisine_type: "south_indian"
+
+Return ONLY valid JSON in this format:
+{{
+    "intent": "intent_name",
+    "confidence": 0.95,
+    "extracted_data": {{
+        "key": "value"
+    }},
+    "normalized_input": "corrected version of user input"
+}}"""
+
+    try:
+        response = oai.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_input}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.3,
+            max_tokens=300
+        )
+
+        result = orjson.loads(response.choices[0].message.content)
+        return result
+
+    except Exception as e:
+        print(f"ERROR: AI intent classification failed: {e}")
+        return {
+            "intent": "unclear",
+            "confidence": 0.0,
+            "extracted_data": {},
+            "normalized_input": user_input
+        }
+
+
+def extract_diet_from_ai_intent(intent_result: dict) -> str:
+    """Extract and normalize diet preference from AI intent result"""
+    if intent_result.get("intent") != "diet_preference":
+        return None
+
+    extracted = intent_result.get("extracted_data", {})
+    diet = extracted.get("diet_type", "").lower()
+
+    # Normalize variations
+    diet_map = {
+        "veg": "vegetarian",
+        "vegetarian": "vegetarian",
+        "non-veg": "non-vegetarian",
+        "nonveg": "non-vegetarian",
+        "non-vegetarian": "non-vegetarian",
+        "non vegetarian": "non-vegetarian",
+        "eggetarian": "eggetarian",
+        "egg": "eggetarian",
+        "vegan": "vegan",
+        "jain": "jain",
+        "keto": "ketogenic",
+        "ketogenic": "ketogenic",
+        "paleo": "paleo"
+    }
+
+    return diet_map.get(diet)
+
+
+def extract_cuisine_from_ai_intent(intent_result: dict) -> str:
+    """Extract and normalize cuisine preference from AI intent result"""
+    if intent_result.get("intent") != "cuisine_preference":
+        return None
+
+    extracted = intent_result.get("extracted_data", {})
+    cuisine = extracted.get("cuisine_type", "").lower().replace(" ", "_")
+
+    # Normalize variations
+    cuisine_map = {
+        "north_indian": "north_indian",
+        "northindian": "north_indian",
+        "north": "north_indian",
+        "south_indian": "south_indian",
+        "southindian": "south_indian",
+        "south": "south_indian",
+        "common": "commonly_available",
+        "commonly_available": "commonly_available",
+        "simple": "commonly_available",
+        "basic": "commonly_available"
+    }
+
+    return cuisine_map.get(cuisine)
+
+
+def extract_food_restrictions_from_ai(intent_result: dict) -> dict:
+    """Extract food restrictions from AI intent result"""
+    if intent_result.get("intent") not in ["food_allergy", "food_removal"]:
+        return None
+
+    extracted = intent_result.get("extracted_data", {})
+
+    if intent_result.get("intent") == "food_allergy":
+        allergens = extracted.get("allergens", [])
+        return {
+            'found_allergens': [],
+            'other_foods': allergens if isinstance(allergens, list) else [allergens],
+            'raw_text': intent_result.get("normalized_input", ""),
+            'ai_detected': True
+        }
+    else:  # food_removal
+        foods = extracted.get("foods_to_remove", [])
+        return {
+            'found_allergens': [],
+            'other_foods': foods if isinstance(foods, list) else [foods],
+            'raw_text': intent_result.get("normalized_input", ""),
+            'simple_removal': True,
+            'ai_detected': True
+        }
 
 
 @router.get("/chat/stream")
@@ -2074,14 +2307,11 @@ async def chat_stream(
    db: Session = Depends(get_db),
 ):
    try:
-       print(f"DEBUG: Received request - user_id: {user_id}, client_id: {client_id}, text: {text}")
-      
        if not text:
            # Fetch client profile and start conversation
            try:
                profile = _fetch_profile(db, client_id)
-               print(f"DEBUG: Client profile: {profile}")
-              
+
                async def _welcome():
                    welcome_msg = f"""Hello! I'm your meal template assistant.
 
@@ -2122,27 +2352,25 @@ I'll create a personalized 7-day meal template for you. First, are you vegetaria
        # Handle voice input
        if audio_transcript and not text:
             text = audio_transcript.strip()
-            print(f"DEBUG: Using audio transcript: {text}")
-       elif audio_transcript and text:
-            print(f"DEBUG: Both text and audio provided, using text: {text}")
       
        # Get pending state from memory
        try:
            pending_state = await mem.get_pending(user_id)
-           print(f"DEBUG: Pending state: {pending_state}")
        except Exception as e:
            print(f"Error getting pending state: {e}")
            pending_state = None
       
        # Handle diet preference selection
        if pending_state and pending_state.get("state") == "awaiting_diet_preference":
-           print("DEBUG: In awaiting_diet_preference state")
-          
-           diet_type = detect_diet_preference(text)
-          
+           # Use AI intent classification
+           ai_intent = ai_intent_classifier(text, "awaiting_diet_preference", oai)
+           diet_type = extract_diet_from_ai_intent(ai_intent)
+
+           # Fallback to regex patterns if AI fails
+           if not diet_type:
+               diet_type = detect_diet_preference(text)
+
            if diet_type:
-               print(f"DEBUG: Detected diet type: {diet_type}")
-              
                # Move to cuisine preference selection
                await mem.set_pending(user_id, {
                    "state": "awaiting_cuisine_preference",
@@ -2150,21 +2378,21 @@ I'll create a personalized 7-day meal template for you. First, are you vegetaria
                    "profile": pending_state.get("profile"),
                    "diet_type": diet_type
                })
-              
+
                async def _ask_cuisine():
                    cuisine_msg = f"""Great! You've selected {diet_type} 🎉
 
 Which cuisine do you prefer?
 
 🍛 North Indian
-🥥 South Indian 
+🥥 South Indian
 🍽️ Commonly Available
 
 Please choose: North Indian, South Indian, or Commonly Available"""
 
                    yield f"data: {json.dumps({'message': cuisine_msg, 'type': 'cuisine_selection'})}\n\n"
                    yield "event: done\ndata: [DONE]\n\n"
-              
+
                return StreamingResponse(_ask_cuisine(), media_type="text/event-stream",
                                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
            else:
@@ -2178,25 +2406,26 @@ Please choose: North Indian, South Indian, or Commonly Available"""
 
 Examples:
 - "I am vegetarian"
-- "non-veg" 
+- "non-veg"
 - "I eat chicken and fish"
 - "veg only" """
                    yield f"data: {json.dumps({'message': msg, 'type': 'clarification'})}\n\n"
                    yield "event: done\ndata: [DONE]\n\n"
-              
+
                return StreamingResponse(_ask_diet_again(), media_type="text/event-stream",
                                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
       
-       # Handle cuisine preference selection 
-       # Handle cuisine preference selection 
+       # Handle cuisine preference selection
        elif pending_state and pending_state.get("state") == "awaiting_cuisine_preference":
-            print("DEBUG: In awaiting_cuisine_preference state")
-            
-            cuisine_type = detect_cuisine_preference(text)
+            # Use AI intent classification
+            ai_intent = ai_intent_classifier(text, "awaiting_cuisine_preference", oai)
+            cuisine_type = extract_cuisine_from_ai_intent(ai_intent)
+
+            # Fallback to regex patterns if AI fails
+            if not cuisine_type:
+                cuisine_type = detect_cuisine_preference(text)
 
             if cuisine_type:
-                print(f"DEBUG: Detected cuisine type: {cuisine_type}")
-
                 # Generate meal plan with both diet and cuisine preferences
                 profile = pending_state.get("profile")
                 diet_type = pending_state.get("diet_type")
@@ -2213,8 +2442,6 @@ Daily Goal: {profile['target_calories']} cal
 
 """
                         yield sse_data(header)
-
-                        print(f"DEBUG: Starting meal plan generation with diet_type={diet_type}, cuisine_type={cuisine_type}")
 
                         days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
                         meal_plan = {}
@@ -2260,8 +2487,6 @@ Daily Goal: {profile['target_calories']} cal
                                 previous_meals['breakfasts'].extend(day_meals['breakfasts'])
                                 previous_meals['lunches'].extend(day_meals['lunches'])
                                 previous_meals['dinners'].extend(day_meals['dinners'])
-
-                        print(f"DEBUG: Generated meal plan with {len(meal_plan)} days")
 
                         # Validate meal plan has content
                         if not meal_plan or len(meal_plan) == 0:
@@ -2318,8 +2543,6 @@ What would you like to do?"""
                                         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
             else:
                 # Handle unrecognized cuisine input - ask for clarification
-                print(f"DEBUG: Unrecognized cuisine input: '{text}'")
-
                 async def _ask_cuisine_again():
                     cuisine_msg = """I didn't recognize that cuisine preference. Please choose from:
 
@@ -2337,235 +2560,32 @@ Please type one of: North Indian, South Indian, or Commonly Available"""
 
        # Handle name change and allergy check
        elif pending_state and pending_state.get("state") == "awaiting_name_change_or_edit":
-            print("DEBUG: In awaiting_name_change state")
+            # Use AI intent classification
+            ai_intent = ai_intent_classifier(text, "awaiting_name_change_or_edit", oai)
+            intent_type = ai_intent.get("intent")
 
-            # NEW CODE: Check for food edit requests first
-            edit_info = detect_food_edit_request(text)
-            if edit_info['is_edit_request']:
-                async def _handle_food_edit():
-                    yield f"data: {json.dumps({'message': 'Food editing feature is being implemented. For now, please continue with day name customization or finalization.', 'type': 'edit_placeholder'})}\n\n"
-                    yield "event: done\ndata: [DONE]\n\n"
-                
-                return StreamingResponse(_handle_food_edit(), media_type="text/event-stream",
-                                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-            
-            # Check for food restrictions/allergies first
-            # Check for food restrictions/allergies first (but not simple "remove" commands)
-            restrictions = None
-            simple_commands = ['remove', 'change', 'edit', 'modify', 'update']
-            text_lower = text.lower().strip()
+            # Handle food allergies/removal
+            if intent_type in ["food_allergy", "food_removal"]:
+                restrictions = extract_food_restrictions_from_ai(ai_intent)
 
-            # Only check for restrictions if it has specific allergy/restriction language
-            if not any(cmd in text_lower for cmd in simple_commands) or any(trigger in text_lower for trigger in ['allergic', 'allergy', 'avoid', 'cant eat', "can't eat", 'intolerant']):
-                restrictions = detect_food_restrictions(text)
-            else:
-                # Handle simple food removal commands
-                if any(cmd in text_lower for cmd in simple_commands):
-                    # Extract food name from "remove X" pattern
-                    food_to_remove = None
-                    if text_lower.startswith('remove '):
-                        food_to_remove = text_lower.replace('remove ', '').strip()
-                    elif ' remove' in text_lower:
-                        food_to_remove = text_lower.replace(' remove', '').strip()
-                    
-                    if food_to_remove:
-                        restrictions = {
-                            'found_allergens': [],
-                            'other_foods': [food_to_remove],
-                            'raw_text': text,
-                            'simple_removal': True  # Flag for simple removal
-                        }
-                            
-            if restrictions:
-                print(f"DEBUG: Detected food restrictions: {restrictions}")
-                
-                # Regenerate meal plan without allergens
-                async def _regenerate_with_restrictions():
-                    try:
-                        avoid_items = restrictions.get('found_allergens', []) + restrictions.get('other_foods', [])
-                        avoid_text = ', '.join(avoid_items)
-                        
-                        yield f"data: {json.dumps({'message': f'I understand you want to avoid: {avoid_text}. Let me regenerate your complete 7-day meal plan without these items. This may take a moment...', 'type': 'allergy_detected'})}\n\n"
-                        
-                        # Regenerate complete 7-day meal plan
-                        try:
-                            import asyncio
-                            from functools import partial
-                            
-                            # Create a partial function for the regeneration
-                            regen_func = partial(
-                                regenerate_meal_plan_without_allergens,
-                                pending_state.get("meal_plan"),
-                                restrictions,
-                                pending_state.get("profile"),
-                                pending_state.get("diet_type"),
-                                pending_state.get("cuisine_type")
-                            )
-                            
-                            # Run with timeout (30 seconds max)
-                            loop = asyncio.get_event_loop()
-                            new_meal_plan = await loop.run_in_executor(None, regen_func)
-                            
-                            # Fallback check
-                            if not new_meal_plan or len(new_meal_plan) == 0:
-                                print("WARNING: Regeneration returned empty plan, using simple removal")
-                                new_meal_plan = simple_food_removal(
-                                    pending_state.get("meal_plan"),
-                                    restrictions.get('other_foods', [])
-                                )
-                            
-                        except Exception as regen_error:
-                            print(f"ERROR: Meal plan regeneration failed: {regen_error}")
-                            print(f"ERROR: Regeneration traceback: {traceback.format_exc()}")
-                            
-                            # Fallback to simple removal
-                            new_meal_plan = simple_food_removal(
-                                pending_state.get("meal_plan"),
-                                restrictions.get('other_foods', [])
-                            )
-                        
-                        if new_meal_plan and len(new_meal_plan) == 7:  # Should have 7 days
-                            
-                            # Update pending state with new meal plan
-                            await mem.set_pending(user_id, {
-                                "state": "awaiting_name_change_after_allergy",
-                                "client_id": pending_state.get("client_id"),
-                                "profile": pending_state.get("profile"),
-                                "diet_type": pending_state.get("diet_type"),
-                                "cuisine_type": pending_state.get("cuisine_type"),
-                                "meal_plan": new_meal_plan,
-                                "avoided_foods": avoid_items
-                            })
-                            
-                            # Send consolidated updated meal plan data
-                            formatted_display = format_meal_plan_for_user_display(
-                                new_meal_plan,
-                                pending_state.get("diet_type"),
-                                pending_state.get("cuisine_type"),
-                                pending_state.get("profile", {}).get('target_calories', 2000)
-                            )
+                # Fallback to regex if AI didn't extract anything useful
+                if not restrictions or not restrictions.get('other_foods'):
+                    restrictions = detect_food_restrictions(text)
 
-                            yield sse_json({
-                                "type": "meal_plan_updated_complete",
-                                "status": "regenerated",
-                                "diet_type": pending_state.get("diet_type"),
-                                "avoided_foods": avoid_items,
-                                "meal_plan": new_meal_plan,
-                                "formatted_data": formatted_display,
-                                "message": f"Updated meal plan without {', '.join(avoid_items)} successfully!"
-                            })
-                            
-                            # THIRD: Send user-friendly text message showing the updated meal plan
-                            user_message = create_user_friendly_meal_plan_message(
-                                new_meal_plan, 
-                                pending_state.get("diet_type"), 
-                                pending_state.get("cuisine_type"), 
-                                pending_state.get("profile", {}).get('target_calories', 2000)
-                            )
-                            yield f"data: {json.dumps({'message': user_message, 'type': 'updated_meal_plan_preview'})}\n\n"
-                            
-                            # FOURTH: Calculate and show summary
-                            all_breakfasts = []
-                            all_lunches = []
-                            all_dinners = []
-                            
-                            for day_name, day_data in new_meal_plan.items():
-                                if isinstance(day_data, list) and len(day_data) >= 7:
-                                    # Extract breakfast foods (slot 3)
-                                    if len(day_data) > 2:
-                                        breakfast_foods = [food.get('name', '') for food in day_data[2].get('foodList', [])]
-                                        all_breakfasts.extend(breakfast_foods)
-                                    
-                                    # Extract lunch foods (slot 5)
-                                    if len(day_data) > 4:
-                                        lunch_foods = [food.get('name', '') for food in day_data[4].get('foodList', [])]
-                                        all_lunches.extend(lunch_foods)
-                                    
-                                    # Extract dinner foods (slot 7)
-                                    if len(day_data) > 6:
-                                        dinner_foods = [food.get('name', '') for food in day_data[6].get('foodList', [])]
-                                        all_dinners.extend(dinner_foods)
-                            
-                            unique_breakfasts = len(set(all_breakfasts))
-                            unique_lunches = len(set(all_lunches))
-                            unique_dinners = len(set(all_dinners))
-                            
-                            success_msg = f"""Your 7-day meal plan has been completely regenerated to avoid: {avoid_text}
-
-            The new plan includes:
-            - {len(new_meal_plan)} unique daily meal plans
-            - {unique_breakfasts} different breakfast items across the week
-            - {unique_lunches} different lunch items across the week  
-            - {unique_dinners} different dinner items across the week
-            - Same calorie target: {pending_state.get('profile', {}).get('target_calories', 0)} calories/day
-            - Same cuisine preference: {pending_state.get('cuisine_type', '').replace('_', ' ').title()}
-            - Safe alternatives for all restricted items
-
-            Now, would you like to customize day names?
-            - Type "yes" to customize day names  
-            - Type "no" to finalize with current names (Monday-Sunday)"""
-                            
-                            yield f"data: {json.dumps({'message': success_msg, 'type': 'meal_plan_updated_success'})}\n\n"
-                            yield "event: done\ndata: [DONE]\n\n"
-                            
-                        else:
-                            print(f"DEBUG: Regeneration failed - got {len(new_meal_plan) if new_meal_plan else 0} days")
-                            yield f"data: {json.dumps({'message': 'Sorry, I had trouble regenerating the complete meal plan. Would you like to continue with the original plan and customize day names instead?', 'type': 'regeneration_error'})}\n\n"
-                            yield "event: done\ndata: [DONE]\n\n"
-                            
-                    except Exception as e:
-                        print(f"Error in allergy regeneration: {e}")
-                        print(f"Allergy regeneration traceback: {traceback.format_exc()}")
-                        yield f"data: {json.dumps({'message': 'Error updating meal plan. Would you like to continue with day name customization?', 'type': 'error'})}\n\n"
-                        yield "event: done\ndata: [DONE]\n\n"
-                
-                return StreamingResponse(_regenerate_with_restrictions(), media_type="text/event-stream",
-                                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-
-            
-
-
-            # Handle accidental numeric input
-            elif text.strip().isdigit() or re.match(r'^[\d,\s]+$', text.strip()):
-                async def _handle_accidental_number():
-                    msg = """It looks like you entered a number. Here are your options:
-
-            🍽️ **Food Changes**: Say things like:
-            • "I'm allergic to peanuts" 
-            • "Remove dairy from plan"
-            • "I can't eat eggs"
-
-            📝 **Day Names**: Say:
-            • "yes" - to customize day names
-            • "no" - to keep Monday-Sunday  
-
-            ✅ **Finalize**: Say:
-            • "done" or "finalize" to save your plan
-
-            What would you like to do?"""
-                    
-                    yield f"data: {json.dumps({'message': msg, 'type': 'clarification'})}\n\n"
-                    yield "event: done\ndata: [DONE]\n\n"
-                
-                return StreamingResponse(_handle_accidental_number(), media_type="text/event-stream",
-                            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-
-
-            # Handle regular yes/no for name change
-            elif is_yes(text):
+            elif intent_type in ["day_rename_yes"]:
+                # User wants to rename days
                 async def _ask_which_days():
-                    msg = """📅 Rename days:  
-1️⃣ Mon  2️⃣ Tue  3️⃣ Wed  4️⃣ Thu  
+                    msg = """📅 Rename days:
+1️⃣ Mon  2️⃣ Tue  3️⃣ Wed  4️⃣ Thu
 5️⃣ Fri  6️⃣ Sat  7️⃣ Sun
 
-✏️ Type:  
-- One: "3"  
-- Many: "1,3,5"  
-- All: "all"  
-- Cancel: "cancel"  
+✏️ Type:
+- One: "3"
+- Many: "1,3,5"
+- All: "all"
+- Cancel: "cancel"
 💡 Ex: "2" → rename Tue"""
 
-                    
                     await mem.set_pending(user_id, {
                         "state": "awaiting_day_selection",
                         "client_id": pending_state.get("client_id"),
@@ -2575,29 +2595,27 @@ Please type one of: North Indian, South Indian, or Commonly Available"""
                         "meal_plan": pending_state.get("meal_plan"),
                         "custom_names": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
                     })
-                    
+
                     yield f"data: {json.dumps({'message': msg, 'type': 'day_selection_request'})}\n\n"
                     yield "event: done\ndata: [DONE]\n\n"
-                
+
                 return StreamingResponse(_ask_which_days(), media_type="text/event-stream",
                                         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-            
-            elif is_no(text) or text.lower() in ['finalize', 'finish', 'done', 'save']:
+
+            elif intent_type in ["day_rename_no"] or text.lower() in ['finalize', 'finish', 'done', 'save']:
                 # Finalize with default names
                 meal_plan = pending_state.get("meal_plan")
                 client_id = pending_state.get("client_id")
                 template_name = "Meal Template (Mon-Sun)"
-                
+
                 # Store template in memory first
                 await _store_meal_template(mem, db, client_id, meal_plan, template_name)
-                print(f"DEBUG: Storing meal template: {template_name}")
-                
+
                 # Save to database directly
                 save_result = save_meal_plan_to_database(client_id, meal_plan, db, replace_all=False)
-                print(f"DEBUG: Database save result: {save_result}")
-                
+
                 await mem.clear_pending(user_id)
-                
+
                 async def _finalize_default():
                     if save_result and save_result.get('success'):
                         if save_result.get('merge_mode'):
@@ -2616,13 +2634,168 @@ Please type one of: North Indian, South Indian, or Commonly Available"""
                         "message": message
                     })
                     yield "event: done\ndata: [DONE]\n\n"
-                
+
                 return StreamingResponse(_finalize_default(), media_type="text/event-stream",
                                         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-            else:
-                # Handle unrecognized input in name change state
-                print(f"DEBUG: Unrecognized input in awaiting_name_change_or_edit state: '{text}'")
 
+            else:
+                # Check for restrictions using fallback regex
+                restrictions = detect_food_restrictions(text)
+
+            if restrictions:
+                # Regenerate meal plan without allergens
+                async def _regenerate_with_restrictions():
+                    try:
+                        avoid_items = restrictions.get('found_allergens', []) + restrictions.get('other_foods', [])
+                        avoid_text = ', '.join(avoid_items)
+
+                        diet_type = pending_state.get("diet_type")
+                        cuisine_type = pending_state.get("cuisine_type")
+                        profile = pending_state.get("profile")
+
+                        # Stream header FIRST with "understanding" message
+                        cuisine_display = cuisine_type.replace('_', ' ').title()
+                        header = f"""I understand you want to avoid: {avoid_text}.
+
+Regenerating your 7-day meal plan...
+
+🍽️ YOUR UPDATED MEAL PLAN
+Diet: {diet_type.title()}
+Style: {cuisine_display}
+Daily Goal: {profile['target_calories']} cal
+Avoided: {avoid_text}
+
+"""
+                        yield sse_data(header)
+
+                        # Regenerate meal plan day by day (inline, streaming each as generated)
+                        import asyncio
+                        from functools import partial
+
+                        # Prepare restrictions
+                        allergen_foods_map = {
+                            'peanuts': ['peanut', 'groundnut', 'peanut butter', 'groundnut oil'],
+                            'tree_nuts': ['almond', 'walnut', 'cashew', 'pistachio', 'nuts', 'mixed nuts'],
+                            'dairy': ['milk', 'cheese', 'paneer', 'butter', 'ghee', 'yogurt', 'curd', 'lassi', 'buttermilk'],
+                            'gluten': ['wheat', 'bread', 'roti', 'chapati', 'naan', 'paratha', 'biscuit'],
+                            'eggs': ['egg', 'eggs', 'boiled egg', 'fried egg', 'scrambled egg'],
+                            'fish': ['fish', 'fish curry', 'fried fish', 'fish fry'],
+                            'shellfish': ['shrimp', 'crab', 'lobster', 'prawns'],
+                            'soy': ['soy', 'soya', 'tofu', 'soybean'],
+                            'sesame': ['sesame', 'til', 'sesame oil'],
+                            'coconut': ['coconut', 'coconut oil', 'coconut milk', 'coconut chutney'],
+                            'onion_garlic': ['onion', 'garlic', 'pyaz', 'lahsun']
+                        }
+
+                        avoid_foods = []
+                        for allergen in restrictions.get('found_allergens', []):
+                            avoid_foods.extend(allergen_foods_map.get(allergen, []))
+                        avoid_foods.extend(restrictions.get('other_foods', []))
+                        avoid_foods = [food.lower() for food in avoid_foods]
+
+                        # Generate each day ONE AT A TIME and stream immediately
+                        days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+                        new_meal_plan = {}
+                        previous_meals = {'breakfasts': [], 'lunches': [], 'dinners': []}
+                        loop = asyncio.get_event_loop()
+
+                        for day in days:
+                            try:
+                                # Generate THIS day in executor (non-blocking)
+                                day_gen_func = partial(
+                                    generate_single_day_with_restrictions,
+                                    day, profile, diet_type, cuisine_type, avoid_foods, previous_meals
+                                )
+
+                                meal_data = await loop.run_in_executor(None, day_gen_func)
+                                template = convert_ai_meal_to_template(meal_data)
+                                new_meal_plan[day.lower()] = template
+
+                                # Stream THIS day immediately
+                                day_content = format_single_day_for_streaming(day, template)
+                                yield sse_data(day_content)
+
+                                # Track meals for variety
+                                day_meals = extract_main_meals(meal_data)
+                                previous_meals['breakfasts'].extend(day_meals['breakfasts'])
+                                previous_meals['lunches'].extend(day_meals['lunches'])
+                                previous_meals['dinners'].extend(day_meals['dinners'])
+
+                                # Keep only last 3 days
+                                if len(previous_meals['breakfasts']) > 9:
+                                    previous_meals['breakfasts'] = previous_meals['breakfasts'][-9:]
+                                if len(previous_meals['lunches']) > 9:
+                                    previous_meals['lunches'] = previous_meals['lunches'][-9:]
+                                if len(previous_meals['dinners']) > 9:
+                                    previous_meals['dinners'] = previous_meals['dinners'][-9:]
+
+                            except Exception as e:
+                                print(f"Error generating {day}: {e}")
+                                # Use fallback
+                                fallback_data = create_fallback_meal_plan(day, diet_type, cuisine_type, profile, previous_meals)
+                                template = convert_ai_meal_to_template(fallback_data)
+                                new_meal_plan[day.lower()] = template
+
+                                day_content = format_single_day_for_streaming(day, template)
+                                yield sse_data(day_content)
+
+                        if new_meal_plan and len(new_meal_plan) == 7:  # Should have 7 days
+
+                            # Update pending state with new meal plan
+                            await mem.set_pending(user_id, {
+                                "state": "awaiting_name_change_after_allergy",
+                                "client_id": pending_state.get("client_id"),
+                                "profile": profile,
+                                "diet_type": diet_type,
+                                "cuisine_type": cuisine_type,
+                                "meal_plan": new_meal_plan,
+                                "avoided_foods": avoid_items
+                            })
+
+                            # Send consolidated meal plan data (for backend storage)
+                            yield sse_json({
+                                "type": "meal_plan_updated_complete",
+                                "status": "regenerated",
+                                "diet_type": diet_type,
+                                "avoided_foods": avoid_items,
+                                "meal_plan": new_meal_plan,
+                                "message": f"Updated meal plan without {', '.join(avoid_items)} successfully!"
+                            })
+
+                            # Show options message
+                            options_msg = f"""
+
+🎉 Your meal plan is updated (avoiding {avoid_text})!
+
+What's next?
+
+🔧 Edit foods: "remove dairy"
+📝 Rename days: "yes"
+✅ Finalize: "no" or "done"
+
+What would you like to do?"""
+
+                            yield sse_data(options_msg)
+                            yield "event: done\ndata: [DONE]\n\n"
+                            
+                        else:
+                            yield f"data: {json.dumps({'message': 'Sorry, I had trouble regenerating the complete meal plan. Would you like to continue with the original plan and customize day names instead?', 'type': 'regeneration_error'})}\n\n"
+                            yield "event: done\ndata: [DONE]\n\n"
+                            
+                    except Exception as e:
+                        print(f"Error in allergy regeneration: {e}")
+                        print(f"Allergy regeneration traceback: {traceback.format_exc()}")
+                        yield f"data: {json.dumps({'message': 'Error updating meal plan. Would you like to continue with day name customization?', 'type': 'error'})}\n\n"
+                        yield "event: done\ndata: [DONE]\n\n"
+                
+                return StreamingResponse(_regenerate_with_restrictions(), media_type="text/event-stream",
+                                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+            
+
+            # Handle unclear intents
+            if not restrictions:
+                # Handle unrecognized input in name change state
                 async def _clarify_options():
                     msg = """I didn't understand that. Here are your options:
 
@@ -2734,7 +2907,7 @@ Or type "cancel" to go back."""
                                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
                     else:
                         async def _invalid_selection():
-                            yield f"data: {json.dumps({'message': 'Please enter valid numbers (1-7). Example: \"2\" or \"1,3,5\"', 'type': 'error'})}\n\n"
+                            yield f"data: {json.dumps({'message': 'Please enter valid numbers (1-10). Example: \"2\" or \"1,3,5\"', 'type': 'error'})}\n\n"
                             yield "event: done\ndata: [DONE]\n\n"
                         
                         return StreamingResponse(_invalid_selection(), media_type="text/event-stream",
@@ -2887,8 +3060,6 @@ Or type "cancel" to go back."""
 
        # Handle name change after allergy update
        elif pending_state and pending_state.get("state") == "awaiting_name_change_after_allergy":
-            print("DEBUG: In awaiting_name_change_after_allergy state")
-            
             if is_yes(text):
                 async def _ask_which_days_after_allergy():
                     msg = """You can customize day names individually. Current names are:
@@ -2898,7 +3069,7 @@ Or type "cancel" to go back."""
 
 Which day(s) would you like to rename? You can:
 - Type a number (1-7) to change one day: "3"
-- Type multiple numbers: "1, 3, 5" 
+- Type multiple numbers: "1, 3, 5"
 - Type "all" to change all days
 - Type "cancel" to keep current names
 
@@ -2929,7 +3100,6 @@ Example: Type "2" to change only Tuesday"""
 
                 # Store template in memory first
                 await _store_meal_template(mem, db, client_id, meal_plan, template_name)
-                print("meal template is", template_name)
 
                 # Save to database directly
                 save_result = save_meal_plan_to_database(client_id, meal_plan, db, replace_all=False)
@@ -2964,13 +3134,9 @@ Example: Type "2" to change only Tuesday"""
 
        # Handle case where no pending state exists but user is sending text (FIRST MESSAGE HANDLER)
        else:
-           print(f"DEBUG: No valid pending state found. Current state: {pending_state}")
-
            # Automatically start new template creation for any message
-           print("DEBUG: Starting new template creation session")
            # Treat as first message and show welcome
            profile = _fetch_profile(db, client_id)
-           print(f"DEBUG: Client profile for first message: {profile}")
 
            async def _welcome_with_greeting():
                # Then show the welcome message with profile info
@@ -3149,9 +3315,7 @@ async def structurize_and_save_meal_template(
         
         if not client_id or not meal_plan:
             return {"status": "error", "message": "Missing client_id or template"}
-        
-        print(f"DEBUG: Structurizing meal template for client {client_id}")
-        
+
         # Delete existing templates
         db.query(ClientDietTemplate).filter(ClientDietTemplate.client_id == client_id).delete()
         
@@ -3185,10 +3349,9 @@ async def structurize_and_save_meal_template(
             )
             db.add(new_template)
             templates_created += 1
-        
+
         db.commit()
-        print(f"DEBUG: Successfully saved {templates_created} meal templates")
-        
+
         return {
             "status": "success", 
             "message": f"Saved {templates_created} meal templates",
